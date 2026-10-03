@@ -1,13 +1,13 @@
-"""Minimal JARVIS desktop orb prototype.
+"""JARVIS floating holographic core for Windows.
 
 Run with: py desktop_orb.py
-This is only the visual shell; voice and PC control are integrated in later stages.
+Visual prototype only; voice and PC control will be connected in later stages.
 """
 import math
 import sys
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QConicalGradient, QPainter, QPen, QRadialGradient
+from PySide6.QtGui import QAction, QColor, QConicalGradient, QFont, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 
@@ -15,7 +15,7 @@ class JarvisOrb(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("JARVIS")
-        self.setFixedSize(220, 220)
+        self.setFixedSize(390, 390)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -26,66 +26,118 @@ class JarvisOrb(QWidget):
         self.drag_offset = None
 
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.right() - self.width() - 36, screen.bottom() - self.height() - 70)
+        self.move(screen.right() - self.width() - 28, screen.bottom() - self.height() - 54)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
         self.timer.start(33)
 
     def animate(self):
-        self.phase = (self.phase + 1.6) % 360
+        self.phase = (self.phase + 1.15) % 360
         self.update()
 
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cx, cy = self.width() / 2, self.height() / 2
-        pulse = 2.5 * math.sin(math.radians(self.phase * 2))
-        radius = 69 + pulse
+        cx, cy = self.width() / 2, self.height() / 2 - 8
+        phase = self.phase
+        pulse = 3.0 * math.sin(math.radians(phase * 2))
+        core_r = 76 + pulse
 
-        # Soft outer glow
-        glow = QRadialGradient(cx, cy, 100)
-        glow.setColorAt(0.0, QColor(0, 180, 255, 55))
-        glow.setColorAt(0.62, QColor(0, 120, 255, 20))
-        glow.setColorAt(1.0, QColor(0, 70, 180, 0))
+        # Broad, transparent amber glow.
+        glow = QRadialGradient(cx, cy, 166)
+        glow.setColorAt(0.0, QColor(255, 111, 18, 48))
+        glow.setColorAt(0.38, QColor(255, 91, 10, 22))
+        glow.setColorAt(1.0, QColor(255, 80, 0, 0))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(glow)
-        p.drawEllipse(QPoint(int(cx), int(cy)), 99, 99)
+        p.drawEllipse(QPoint(int(cx), int(cy)), 165, 165)
 
-        # Dark glass core
-        core = QRadialGradient(cx - 18, cy - 22, radius * 1.5)
-        core.setColorAt(0.0, QColor(18, 70, 110, 245))
-        core.setColorAt(0.58, QColor(4, 22, 48, 250))
-        core.setColorAt(1.0, QColor(1, 7, 20, 250))
-        p.setBrush(core)
-        p.setPen(QPen(QColor(60, 210, 255, 185), 1.5))
-        p.drawEllipse(QPoint(int(cx), int(cy)), int(radius), int(radius))
-
-        # Rotating segmented energy ring
-        ring = QConicalGradient(cx, cy, self.phase)
-        ring.setColorAt(0.0, QColor(80, 240, 255, 20))
-        ring.setColorAt(0.18, QColor(70, 220, 255, 240))
-        ring.setColorAt(0.42, QColor(20, 110, 255, 45))
-        ring.setColorAt(0.7, QColor(0, 240, 255, 220))
-        ring.setColorAt(1.0, QColor(80, 240, 255, 20))
+        # Fine circular telemetry grid.
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(ring, 3.0))
-        p.drawEllipse(QPoint(int(cx), int(cy)), int(radius + 7), int(radius + 7))
+        for r, alpha, width in ((142, 42, 1), (151, 65, 1), (163, 28, 1)):
+            p.setPen(QPen(QColor(60, 181, 255, alpha), width))
+            p.drawEllipse(QPoint(int(cx), int(cy)), r, r)
 
-        # Inner waveform-like arcs
-        p.setPen(QPen(QColor(80, 220, 255, 150), 1.2))
-        for i in range(3):
-            r = 28 + i * 12 + 2 * math.sin(math.radians(self.phase + i * 55))
-            p.drawArc(int(cx-r), int(cy-r), int(r*2), int(r*2), int(self.phase*16 + i*120), 105*16)
+        # Orbital ellipses: rotating-looking tilted arcs.
+        p.save()
+        p.translate(cx, cy)
+        for i, (rx, ry, start, span) in enumerate([
+            (128, 54, int(phase * 16), 238 * 16),
+            (111, 43, int(-phase * 13 + 850), 265 * 16),
+            (91, 36, int(phase * 19 + 1750), 205 * 16),
+        ]):
+            alpha = 170 if i == 0 else 105
+            p.setPen(QPen(QColor(255, 153 + i * 18, 50, alpha), 1.5 if i == 0 else 1.0))
+            p.save()
+            p.rotate((phase * (0.24 if i % 2 == 0 else -0.31)) + i * 53)
+            p.drawArc(-rx, -ry, rx * 2, ry * 2, start, span)
+            p.restore()
+        p.restore()
 
-        # Central light
-        center = QRadialGradient(cx, cy, 19)
-        center.setColorAt(0.0, QColor(190, 255, 255, 240))
-        center.setColorAt(0.35, QColor(40, 200, 255, 170))
-        center.setColorAt(1.0, QColor(0, 120, 255, 0))
+        # Central dark plasma sphere.
+        core = QRadialGradient(cx - 22, cy - 28, core_r * 1.48)
+        core.setColorAt(0.0, QColor(255, 197, 91, 250))
+        core.setColorAt(0.20, QColor(255, 116, 22, 250))
+        core.setColorAt(0.48, QColor(105, 35, 13, 248))
+        core.setColorAt(0.82, QColor(20, 14, 21, 250))
+        core.setColorAt(1.0, QColor(2, 8, 18, 248))
+        p.setBrush(core)
+        p.setPen(QPen(QColor(255, 171, 67, 220), 1.4))
+        p.drawEllipse(QPoint(int(cx), int(cy)), int(core_r), int(core_r))
+
+        # Fractured luminous rings around the core.
+        ring = QConicalGradient(cx, cy, phase)
+        ring.setColorAt(0.0, QColor(255, 225, 150, 245))
+        ring.setColorAt(0.13, QColor(255, 111, 23, 30))
+        ring.setColorAt(0.25, QColor(255, 169, 55, 235))
+        ring.setColorAt(0.42, QColor(255, 87, 18, 40))
+        ring.setColorAt(0.61, QColor(255, 218, 125, 245))
+        ring.setColorAt(0.78, QColor(255, 106, 20, 45))
+        ring.setColorAt(1.0, QColor(255, 225, 150, 245))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(ring, 3.2))
+        p.drawEllipse(QPoint(int(cx), int(cy)), int(core_r + 8), int(core_r + 8))
+
+        # Segmented outer ticks.
+        for i in range(64):
+            angle = math.radians(i * 360 / 64 + phase * 0.45)
+            inner = 151 if i % 4 else 145
+            outer = 157 if i % 4 else 165
+            x1, y1 = cx + math.cos(angle) * inner, cy + math.sin(angle) * inner
+            x2, y2 = cx + math.cos(angle) * outer, cy + math.sin(angle) * outer
+            color = QColor(255, 163, 72, 150 if i % 4 == 0 else 65)
+            p.setPen(QPen(color, 1.4 if i % 4 == 0 else 0.8))
+            p.drawLine(int(x1), int(y1), int(x2), int(y2))
+
+        # Blue/orange floating telemetry labels, deliberately small and discreet.
+        p.setFont(QFont("Consolas", 7, QFont.Weight.DemiBold))
+        p.setPen(QColor(112, 211, 255, 210))
+        p.drawText(16, 48, "SYSTEM  /  ONLINE")
+        p.drawText(246, 48, "CORE  /  STANDBY")
+        p.setPen(QColor(255, 176, 90, 210))
+        p.drawText(18, 345, "J.A.R.V.I.S  //  CORE")
+        p.setPen(QColor(112, 211, 255, 190))
+        p.drawText(246, 345, "VOICE LINK  READY")
+
+        # Tiny decorative performance bars, no fake live system metrics.
+        for i in range(12):
+            h = 4 + (i % 4) * 3
+            x = 20 + i * 6
+            p.setPen(QPen(QColor(69, 188, 255, 115), 2))
+            p.drawLine(x, 62, x, 62 + h)
+            p.setPen(QPen(QColor(255, 152, 55, 105), 2))
+            p.drawLine(x, 323, x, 323 - h)
+
+        # Bright central plasma light.
+        center = QRadialGradient(cx - 7, cy - 10, 35)
+        center.setColorAt(0.0, QColor(255, 242, 190, 245))
+        center.setColorAt(0.20, QColor(255, 177, 68, 210))
+        center.setColorAt(0.65, QColor(255, 97, 16, 75))
+        center.setColorAt(1.0, QColor(255, 80, 0, 0))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(center)
-        p.drawEllipse(QPoint(int(cx), int(cy)), 19, 19)
+        p.drawEllipse(QPoint(int(cx - 7), int(cy - 10)), 35, 35)
         p.end()
 
     def mousePressEvent(self, event):
@@ -113,8 +165,7 @@ class JarvisOrb(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # Placeholder for the future voice/listening panel.
-            self.setToolTip("JARVIS: fitur suara akan dihubungkan pada tahap berikutnya.")
+            self.setToolTip("JARVIS: voice interaction will be connected in the next stage.")
             self.setToolTipDuration(2500)
 
 
