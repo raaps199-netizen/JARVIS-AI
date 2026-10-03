@@ -34,7 +34,7 @@ SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 MIN_RECORD_SECONDS = 0.35
 SILENCE_SECONDS = 0.65
-START_TIMEOUT_SECONDS = 3.0
+START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
 
 
@@ -341,6 +341,60 @@ def record_audio(path: Path) -> None:
         wav.writeframes(recording.tobytes())
 
 
+def try_direct_command(text: str) -> str | None:
+    normalized = " ".join(text.lower().strip().split())
+    prefixes = ("tolong ", "jarvis ", "bisa ")
+
+    for prefix in prefixes:
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):].strip()
+
+    app_aliases = {
+        "chrome": "chrome",
+        "google chrome": "chrome",
+        "notepad": "notepad",
+        "kalkulator": "calculator",
+        "calculator": "calculator",
+        "explorer": "explorer",
+        "task manager": "task manager",
+        "vscode": "vscode",
+        "vs code": "vscode",
+        "pengaturan": "settings",
+        "settings": "settings",
+    }
+
+    if normalized.startswith("buka ") and normalized[5:].strip() in app_aliases:
+        app = app_aliases[normalized[5:].strip()]
+        result = open_app(app)
+        print(f"[DIRECT] open_app -> {result}")
+        return result
+
+    search_prefixes = (
+        "cari tentang ",
+        "cari ",
+        "search tentang ",
+        "search ",
+        "google tentang ",
+        "google ",
+        "buka chrome dan cari tentang ",
+        "buka chrome lalu cari tentang ",
+        "buka chrome terus cari tentang ",
+        "buka chrome dan cari ",
+        "buka chrome lalu cari ",
+        "buka chrome terus cari ",
+    )
+
+    for prefix in search_prefixes:
+        if normalized.startswith(prefix):
+            query = normalized[len(prefix):].strip()
+            if query:
+                result = search_web(query)
+                print(f"[DIRECT] search_web -> {result}")
+                return result
+
+    return None
+
+
 def transcribe(client: genai.Client, path: Path) -> str:
     audio_bytes = path.read_bytes()
     try:
@@ -415,6 +469,11 @@ def main() -> None:
             }:
                 speak("Mode suara dihentikan, Sir.")
                 break
+
+            direct_reply = try_direct_command(heard)
+            if direct_reply is not None:
+                speak(direct_reply)
+                continue
 
             try:
                 reply = ask_agent(client, heard)
