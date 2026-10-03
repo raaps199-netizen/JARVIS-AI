@@ -203,12 +203,22 @@ function getJarvisVoice(){
     || null;
 }
 
+function prepareSpeechPrefetch(){
+  if(voiceMuted || speechPrefetch || !speechQueue.length) return;
+  const nextText=cleanSpeechText(speechQueue.shift());
+  if(nextText){
+    const generation=speechGeneration;
+    speechPrefetch={
+      text:nextText,
+      generation,
+      promise:fetchSpeechBlob(nextText).catch(error=>({ttsError:error,generation}))
+    };
+  }
+}
+
 async function speakNext(){
   if(voiceMuted || isSpeaking) return;
-  if(!speechPrefetch && speechQueue.length){
-    const nextText=cleanSpeechText(speechQueue.shift());
-    if(nextText) speechPrefetch={text:nextText,generation:speechGeneration,promise:fetchSpeechBlob(nextText)};
-  }
+  prepareSpeechPrefetch();
   if(!speechPrefetch) return;
 
   isSpeaking=true;
@@ -217,7 +227,9 @@ async function speakNext(){
   const generation=current.generation;
 
   try{
-    const blob=await current.promise;
+    const result=await current.promise;
+    if(result && result.ttsError) throw result.ttsError;
+    const blob=result;
     if(generation!==speechGeneration || voiceMuted){
       isSpeaking=false;
       return;
@@ -225,10 +237,7 @@ async function speakNext(){
 
     // Generate the following chunk while this chunk is playing, hiding most
     // of ElevenLabs' request latency between sentences.
-    if(!speechPrefetch && speechQueue.length){
-      const nextText=cleanSpeechText(speechQueue.shift());
-      if(nextText) speechPrefetch={text:nextText,generation:speechGeneration,promise:fetchSpeechBlob(nextText)};
-    }
+    prepareSpeechPrefetch();
 
     ttsObjectUrl=URL.createObjectURL(blob);
     const objectUrl=ttsObjectUrl;
@@ -288,6 +297,7 @@ function queueSpeech(text,flush=false){
     const chunk = cleanSpeechText(speechBuffer.slice(0,cutAt));
     speechBuffer = speechBuffer.slice(cutAt);
     if(chunk) speechQueue.push(chunk);
+    prepareSpeechPrefetch();
     speakNext();
   }
 
@@ -295,6 +305,7 @@ function queueSpeech(text,flush=false){
     const finalChunk = cleanSpeechText(speechBuffer);
     if(finalChunk) speechQueue.push(finalChunk);
     speechBuffer="";
+    prepareSpeechPrefetch();
     speakNext();
   }
 }
