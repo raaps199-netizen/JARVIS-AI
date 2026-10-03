@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import sounddevice as sd
+import speech_recognition as sr
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -26,6 +27,7 @@ from jarvis_tts import speak
 load_dotenv()
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+STT_MODEL = os.getenv("GEMINI_STT_MODEL", MODEL)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
@@ -191,6 +193,22 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
     return f"Tool {name} tidak dikenal."
 
 
+def _gemini_generate(client: genai.Client, *, model: str, contents: Any, config: Any):
+    last_error = None
+    for attempt in range(3):
+        try:
+            return client.models.generate_content(model=model, contents=contents, config=config)
+        except Exception as exc:
+            last_error = exc
+            message = str(exc).upper()
+            if "503" not in message and "UNAVAILABLE" not in message and "429" not in message:
+                raise
+            wait = 2 * (attempt + 1)
+            print(f"[GEMINI] Layanan sibuk ({attempt + 1}/3), retry {wait} detik...")
+            time.sleep(wait)
+    raise last_error
+
+
 def ask_agent(client: genai.Client, user_text: str) -> str:
     contents = [
         types.Content(
@@ -206,11 +224,7 @@ def ask_agent(client: genai.Client, user_text: str) -> str:
     )
 
     for _ in range(5):
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=contents,
-            config=config,
-        )
+        response = _gemini_generate(client, model=MODEL, contents=contents, config=config)
 
         calls = response.function_calls or []
         if not calls:
@@ -260,21 +274,36 @@ def record_audio(path: Path) -> None:
 
 def transcribe(client: genai.Client, path: Path) -> str:
     audio_bytes = path.read_bytes()
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=[
-            types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
-            types.Part(
-                text=(
-                    "Transkripsikan audio ini ke teks bahasa Indonesia. "
-                    "Tulis hanya apa yang diucapkan, tanpa penjelasan tambahan. "
-                    "Kalau tidak ada ucapan yang jelas, balas kosong."
-                )
-            ),
-        ],
-        config=types.GenerateContentConfig(temperature=0),
-    )
-    return (response.text or "").strip()
+    try:
+        response = _gemini_generate(
+            client,
+            model=STT_MODEL,
+            contents=[
+                types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
+                types.Part(
+                    text=(
+                        "Transkripsikan audio ini ke teks bahasa Indonesia. "
+                        "Tulis hanya apa yang diucapkan, tanpa penjelasan tambahan. "
+                        "Kalau tidak ada ucapan yang jelas, balas kosong."
+                    )
+                ),
+            ],
+            config=types.GenerateContentConfig(temperature=0),
+        )
+        return (response.text or "").strip()
+    except Exception as exc:
+        print(f"[STT] Gemini gagal: {exc}")
+        print("[STT] Mencoba fallback Google Speech Recognition...")
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(str(path)) as source:
+            audio = recognizer.record(source)
+        try:
+            text = recognizer.recognize_google(audio, language="id-ID")
+            return text.strip()
+        except sr.UnknownValueError:
+            return ""
+        except sr.RequestError as fallback_exc:
+            raise RuntimeError(f"Gemini STT dan fallback Google gagal: {fallback_exc}") from fallback_exc
 
 
 def main() -> None:
