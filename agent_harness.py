@@ -333,6 +333,16 @@ def close_app(name: str) -> str:
         process_name = _windows_process_name_from_hwnd(hwnd)
         if process_name == target:
             matches.append(hwnd)
+            return True
+
+        # Windows 11 Calculator can be hosted by ApplicationFrameHost.exe
+        # instead of CalculatorApp.exe. Match its exact window title as a
+        # fallback, so we still close Calculator and not the focused window.
+        if name == "calculator" and process_name == "applicationframehost.exe":
+            title_buffer = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, title_buffer, 256)
+            if title_buffer.value.strip().lower() == "calculator":
+                matches.append(hwnd)
         return True
 
     user32.EnumWindows(enum_window, 0)
