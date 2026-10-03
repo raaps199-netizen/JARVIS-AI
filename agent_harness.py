@@ -34,7 +34,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 MIN_RECORD_SECONDS = 0.35
-SILENCE_SECONDS = 0.65
+SILENCE_SECONDS = 1.5
 UI_DELAY_SECONDS = 0.8
 START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
@@ -390,6 +390,8 @@ def ask_agent(client: Groq, user_text: str) -> str:
                 result = f"Tool error: {exc}"
 
             print(f"[TOOL] {tool_call.function.name} -> {result}")
+            if result == "__JARVIS_STOP__":
+                return "__JARVIS_STOP__"
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -671,7 +673,8 @@ def main() -> None:
                 continue
 
             print(f"Sir: {heard}")
-            normalized = heard.lower().strip()
+            normalized = " ".join(heard.lower().strip().split())
+            normalized = normalized.strip(".,!?;:")
 
             shutdown_phrases = {
                 "shutdown jarvis",
@@ -692,7 +695,17 @@ def main() -> None:
                 "surface matikan diri lo",
             }
 
-            if normalized in shutdown_phrases:
+            shutdown_words = set(normalized.split())
+            shutdown_intent = (
+                normalized in shutdown_phrases
+                or (("matikan" in shutdown_words) and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"}))
+                or normalized.startswith("matikan diri")
+                or normalized.startswith("stop jarvis")
+                or normalized.startswith("stop jervis")
+                or normalized.startswith("stop yervis")
+            )
+
+            if shutdown_intent:
                 print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
                 speak("Baik, Sir. Saya mematikan sistem JARVIS.")
                 return
