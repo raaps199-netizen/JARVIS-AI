@@ -64,7 +64,7 @@
     <div class="hint">Music engine memakai Audius, yang menyediakan API untuk search dan stream. Lagu populer belum tentu tersedia di katalognya.</div>
   </aside>
   <main class="panel">
-    <header><div><h2>JARVIS Console</h2><span>Realtime-ish voice + streaming AI</span></div><span>STREAM</span></header>
+    <header><div><h2>JARVIS Console</h2><span>ElevenLabs voice + streaming AI</span></div><span>STREAM</span></header>
     <section id="youtubeWrap" class="yt-wrap">
       <div class="yt-heading" id="youtubeTitle">YouTube Player</div>
       <div class="yt-subtitle" id="youtubeChannel">Pemutar resmi YouTube</div>
@@ -79,7 +79,7 @@
         <button class="mic" id="muteVoice" type="button" title="Bisukan suara JARVIS">🔊</button>
         <button class="send" id="send" type="submit">Kirim</button>
       </form>
-      <div class="hint" id="hint">Klik 🎙️, bicara, lalu klik lagi untuk berhenti.</div>
+      <div class="hint" id="hint">Klik 🎙️, bicara, lalu klik lagi untuk berhenti. Suara AI memakai ElevenLabs.</div>
     </div>
   </main>
 </div>
@@ -129,14 +129,27 @@ function addMessage(text,role){
   return bubble;
 }
 
+let ttsAudio=null;
+let ttsObjectUrl=null;
+
 function stopSpeaking(){
-  if("speechSynthesis" in window){
-    window.speechSynthesis.cancel();
+  if("speechSynthesis" in window) window.speechSynthesis.cancel();
+  if(ttsAudio){
+    ttsAudio.onended=null;
+    ttsAudio.onerror=null;
+    ttsAudio.pause();
+    ttsAudio.src="";
+    ttsAudio=null;
+  }
+  if(ttsObjectUrl){
+    URL.revokeObjectURL(ttsObjectUrl);
+    ttsObjectUrl=null;
   }
   speechQueue=[];
   speechBuffer="";
   isSpeaking=false;
 }
+
 
 function cleanSpeechText(text){
   return text
@@ -170,36 +183,66 @@ function getJarvisVoice(){
     || null;
 }
 
-function speakNext(){
-  if(voiceMuted || !("speechSynthesis" in window) || isSpeaking || speechQueue.length===0) return;
+async function speakNext(){
+  if(voiceMuted || isSpeaking || speechQueue.length===0) return;
 
   isSpeaking=true;
   const text=cleanSpeechText(speechQueue.shift());
-
   if(!text){
     isSpeaking=false;
     speakNext();
     return;
   }
 
-  const utterance=new SpeechSynthesisUtterance(text);
-  utterance.voice=getJarvisVoice();
-  utterance.lang=utterance.voice?.lang || "id-ID";
-  utterance.rate=1.12;
-  utterance.pitch=0.86;
-  utterance.volume=1;
+  try{
+    const response=await fetch("/api/tts",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text})
+    });
+    if(!response.ok){
+      let detail="ElevenLabs TTS gagal ("+response.status+").";
+      try{
+        const data=await response.json();
+        detail=data.error || detail;
+      }catch(error){}
+      throw new Error(detail);
+    }
 
-  utterance.onend=()=>{
+    const blob=await response.blob();
+    if(voiceMuted){
+      isSpeaking=false;
+      return;
+    }
+    if(ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
+    ttsObjectUrl=URL.createObjectURL(blob);
+    ttsAudio=new Audio(ttsObjectUrl);
+    ttsAudio.preload="auto";
+    ttsAudio.onended=()=>{
+      if(ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
+      ttsObjectUrl=null;
+      ttsAudio=null;
+      isSpeaking=false;
+      speakNext();
+    };
+    ttsAudio.onerror=()=>{
+      if(ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
+      ttsObjectUrl=null;
+      ttsAudio=null;
+      isSpeaking=false;
+      addMessage("Suara ElevenLabs gagal diputar di browser.","assistant");
+      speakNext();
+    };
+    await ttsAudio.play();
+  }catch(error){
     isSpeaking=false;
-    speakNext();
-  };
-
-  utterance.onerror=()=>{
-    isSpeaking=false;
-    speakNext();
-  };
-
-  window.speechSynthesis.speak(utterance);
+    addMessage("TTS error: "+error.message,"assistant");
+    speechQueue=[];
+    speechBuffer="";
+    if(voiceMode && !voiceMuted){
+      hint.textContent="Periksa ELEVENLABS_API_KEY dan ELEVENLABS_VOICE_ID di Vercel.";
+    }
+  }
 }
 
 function queueSpeech(text,flush=false){
