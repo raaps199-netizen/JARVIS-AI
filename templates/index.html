@@ -75,7 +75,8 @@
     <div class="composer">
       <form id="form">
         <input id="input" autocomplete="off" placeholder="Ketik perintah ke Jarvis...">
-        <button class="mic" id="mic" type="button" title="Tekan untuk bicara">🎙️</button>
+        <button class="mic" id="mic" type="button" title="Mulai atau hentikan mode suara">🎙️ Voice</button>
+        <button class="mic" id="muteVoice" type="button" title="Bisukan suara JARVIS">🔊</button>
         <button class="send" id="send" type="submit">Kirim</button>
       </form>
       <div class="hint" id="hint">Klik 🎙️, bicara, lalu klik lagi untuk berhenti.</div>
@@ -94,11 +95,12 @@ const hint=document.getElementById("hint");
 
 let recognition=null;
 let isListening=false;
-let isStartingRecognition=false;
-let wakeMode=false;
-let awaitingCommand=false;
-let restartRecognition=false;
-let finalTranscript="";
+let voiceMode=false;
+let voiceMuted=false;
+let voiceRestartPending=false;
+let voiceTranscript="";
+let voicePauseTimer=null;
+let voiceRequestBusy=false;
 let speechQueue=[];
 let isSpeaking=false;
 let speechBuffer="";
@@ -168,7 +170,7 @@ function getJarvisVoice(){
 }
 
 function speakNext(){
-  if(!("speechSynthesis" in window) || isSpeaking || speechQueue.length===0) return;
+  if(voiceMuted || !("speechSynthesis" in window) || isSpeaking || speechQueue.length===0) return;
 
   isSpeaking=true;
   const text=cleanSpeechText(speechQueue.shift());
@@ -496,7 +498,7 @@ async function sendMessage(message){
           reply += data.delta;
           assistantBubble.textContent=reply;
           chat.scrollTop=chat.scrollHeight;
-          if(!noVoice){
+          if(!noVoice && !voiceMuted){
             queueSpeech(data.delta);
           }
         }
@@ -517,7 +519,6 @@ async function sendMessage(message){
     hint.textContent="Terjadi error.";
   }finally{
     send.disabled=false;
-    mic.disabled=false;
     input.disabled=false;
     input.focus();
     checkStatus();
@@ -545,147 +546,135 @@ document.getElementById("musicResume").addEventListener("click",musicResume);
 document.getElementById("musicStop").addEventListener("click",musicStop);
 
 const SpeechRecognition=window.SpeechRecognition || window.webkitSpeechRecognition;
+const muteVoiceButton=document.getElementById("muteVoice");
+
+function updateVoiceControls(){
+  mic.classList.toggle("recording",voiceMode);
+  mic.textContent=voiceMode ? "⏹ Stop" : "🎙️ Voice";
+  muteVoiceButton.textContent=voiceMuted ? "🔇" : "🔊";
+  muteVoiceButton.title=voiceMuted ? "Nyalakan suara JARVIS" : "Bisukan suara JARVIS";
+}
+
+function stopVoiceRecognition(){
+  voiceMode=false;
+  voiceRestartPending=false;
+  clearTimeout(voicePauseTimer);
+  try{ recognition?.stop(); }catch(error){}
+  isListening=false;
+  updateVoiceControls();
+  hint.textContent="Mode suara dimatikan.";
+}
+
+async function processVoiceTurn(){
+  const message=voiceTranscript.trim();
+  voiceTranscript="";
+  input.value="";
+  if(!message || voiceRequestBusy || !voiceMode) return;
+  voiceRequestBusy=true;
+  voiceRestartPending=true;
+  await sendMessage(message);
+  voiceRequestBusy=false;
+  if(voiceMode){
+    hint.textContent="Silakan bicara. JARVIS mendengarkan...";
+    startVoiceRecognition();
+  }
+}
+
+function startVoiceRecognition(){
+  if(!recognition || !voiceMode || isListening || voiceRequestBusy) return;
+  try{
+    recognition.start();
+  }catch(error){
+    if(error.name!=="InvalidStateError"){
+      hint.textContent="Gagal mengaktifkan mikrofon: "+error.message;
+    }
+  }
+}
 
 if(SpeechRecognition){
   recognition=new SpeechRecognition();
   recognition.lang="id-ID";
-  recognition.continuous=false;
-  recognition.interimResults=false;
+  recognition.continuous=true;
+  recognition.interimResults=true;
 
   recognition.onstart=()=>{
-    isStartingRecognition=false;
     isListening=true;
-    finalTranscript="";
-    input.value="";
-    mic.classList.add("recording");
-    mic.textContent="⏹️";
-    hint.textContent=wakeMode
-      ? (awaitingCommand ? "JARVIS aktif. Silakan beri perintah..." : 'Mode panggil aktif. Ucapkan "Jarvis".')
-      : "Lagi dengerin satu perintah...";
+    hint.textContent="Mode suara aktif. Bicara seperti biasa, lalu berhenti sebentar saat selesai.";
+    updateVoiceControls();
   };
 
   recognition.onresult=event=>{
-    const result=event.results[event.resultIndex];
-    if(!result || !result.isFinal) return;
-    const transcript=result[0].transcript.trim();
-    const normalized=transcript.toLowerCase().replace(/[^a-z0-9\\s]/g," ").trim();
-
-    if(wakeMode && !awaitingCommand){
-      if(/\\b(jarvis|jarvisnya|jervis)\\b/i.test(normalized)){
-        awaitingCommand=true;
-        hint.textContent="JARVIS siap. Sebutkan perintah lu.";
-        addMessage("Ya, gue denger. Ada perintah?","assistant");
-      }
-      return;
+    let interim="";
+    for(let i=event.resultIndex;i<event.results.length;i++){
+      const result=event.results[i];
+      if(result.isFinal) voiceTranscript += result[0].transcript+" ";
+      else interim += result[0].transcript;
     }
-
-    if(wakeMode && awaitingCommand){
-      if(!normalized) return;
-      awaitingCommand=false;
-      wakeMode=false;
-      restartRecognition=false;
-      isListening=false;
-      try{ recognition.stop(); }catch(error){}
-      mic.classList.remove("recording");
-      mic.textContent="🎙️";
-      hint.textContent="Mengirim perintah ke JARVIS...";
-      sendMessage(transcript);
-      return;
+    input.value=(voiceTranscript+" "+interim).trim();
+    if(voiceTranscript.trim()){
+      clearTimeout(voicePauseTimer);
+      voicePauseTimer=setTimeout(()=>{
+        if(isListening){
+          voiceRestartPending=true;
+          try{ recognition.stop(); }catch(error){}
+        }
+      },850);
     }
-
-    finalTranscript=transcript;
-    input.value=finalTranscript;
   };
 
   recognition.onerror=event=>{
-    isStartingRecognition=false;
     isListening=false;
-    mic.classList.remove("recording");
-    mic.textContent="🎙️";
-
     if(event.error==="not-allowed" || event.error==="service-not-allowed"){
-      hint.textContent="Microphone atau speech recognition ditolak browser.";
-      addMessage("Voice error: izinkan microphone dan speech recognition di browser.","assistant");
-    }else if(event.error!=="aborted"){
-      hint.textContent="Voice error: "+event.error;
+      hint.textContent="Izin mikrofon ditolak. Izinkan mikrofon di pengaturan browser.";
+      addMessage("Voice error: izinkan microphone di browser, lalu mulai mode suara lagi.","assistant");
+      stopVoiceRecognition();
+    }else if(event.error!=="aborted" && voiceMode){
+      hint.textContent="Gangguan mikrofon: "+event.error;
     }
   };
 
-  recognition.onend=()=>{
-    isStartingRecognition=false;
+  recognition.onend=async()=>{
     isListening=false;
-
-    if(wakeMode){
-      // Android/Chrome may end speech recognition automatically; restart while armed.
-      mic.classList.add("recording");
-      mic.textContent="⏹️";
-      hint.textContent=awaitingCommand
-        ? "JARVIS aktif. Silakan beri perintah..."
-        : 'Mode panggil aktif. Ucapkan "Jarvis".';
-      if(restartRecognition){
-        restartRecognition=false;
-        try{
-          isStartingRecognition=true;
-          recognition.start();
-        }catch(error){
-          isStartingRecognition=false;
-          hint.textContent="Browser menghentikan mode panggil. Tekan mikrofon untuk mengaktifkannya lagi.";
-        }
-      }
+    clearTimeout(voicePauseTimer);
+    if(!voiceMode) return;
+    if(voiceTranscript.trim()){
+      await processVoiceTurn();
       return;
     }
-
-    mic.classList.remove("recording");
-    mic.textContent="🎙️";
-    const message=input.value.trim();
-    input.value="";
-    if(message){
-      hint.textContent="Mengirim ke JARVIS...";
-      sendMessage(message);
+    if(voiceRestartPending){
+      voiceRestartPending=false;
+      setTimeout(startVoiceRecognition,250);
     }else{
-      hint.textContent="Gue nggak nangkep apa-apa. Coba lagi.";
+      setTimeout(startVoiceRecognition,250);
     }
   };
 
   mic.addEventListener("click",()=>{
-    if(isListening || wakeMode){
-      wakeMode=false;
-      awaitingCommand=false;
-      restartRecognition=false;
-      isListening=false;
-      try{ recognition.stop(); }catch(error){}
-      mic.classList.remove("recording");
-      mic.textContent="🎙️";
-      hint.textContent="Mode panggil dimatikan.";
+    if(voiceMode){
+      stopVoiceRecognition();
       return;
     }
-    if(isStartingRecognition) return;
-
-    try{
-      stopSpeaking();
-      input.value="";
-      finalTranscript="";
-      wakeMode=true;
-      awaitingCommand=false;
-      restartRecognition=true;
-      isStartingRecognition=true;
-      recognition.start();
-    }catch(error){
-      wakeMode=false;
-      restartRecognition=false;
-      isStartingRecognition=false;
-      if(error.name==="InvalidStateError"){
-        hint.textContent="Mikrofon masih memproses sesi sebelumnya. Tunggu sebentar lalu coba lagi.";
-        return;
-      }
-      hint.textContent="Gagal memulai voice input.";
-      addMessage("Voice error: "+error.message,"assistant");
-    }
+    stopSpeaking();
+    voiceMode=true;
+    voiceTranscript="";
+    input.value="";
+    updateVoiceControls();
+    hint.textContent="Meminta izin mikrofon...";
+    startVoiceRecognition();
   });
 }else{
   mic.disabled=true;
-  hint.textContent="Browser ini belum mendukung Speech Recognition. Gunakan Chrome/Edge untuk voice input.";
+  hint.textContent="Voice mode perlu Chrome atau Edge yang mendukung Speech Recognition.";
 }
+
+muteVoiceButton.addEventListener("click",()=>{
+  voiceMuted=!voiceMuted;
+  if(voiceMuted) stopSpeaking();
+  updateVoiceControls();
+  hint.textContent=voiceMuted
+    ? "Suara JARVIS dibisukan. Mode suara tetap bisa mendengarkan."
+    : "Suara JARVIS aktif lagi.";
+});
 
 checkStatus();
 </script>
