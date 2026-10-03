@@ -67,6 +67,8 @@ type text, press keyboard shortcuts, read ordinary user files, create/edit/renam
 move/delete files, and operate Microsoft Word deeply. You may chain many tool calls
 to complete a multi-step task.
 
+When the user asks to search using a search field inside the current webpage, use browser_search. Do not substitute the Google search_web tool, and do not use the browser address bar when a page search field is explicitly requested.
+
 When the user refers to a visual or positional target such as "the second video",
 "the third card", "the button on the top right", or "the play icon", use the
 visual_click tool so the current screen is analyzed before the click. Do not rely
@@ -126,6 +128,7 @@ FOLDERS = {
 
 TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"open_app","description":"Open an approved Windows application.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["notepad","calculator","chrome","vscode","word","explorer","task manager","settings"]}},"required":["name"]}}},
+    {"type":"function","function":{"name":"browser_search","description":"Search from the search field inside the currently visible browser page, such as the YouTube search bar. Locate the page search field visually, click it, enter the exact query, and submit it. Use this when the user explicitly asks to search in the current page search bar.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
     {"type":"function","function":{"name":"search_web","description":"Search Google for a requested topic.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
     {"type":"function","function":{"name":"open_site","description":"Open an approved website.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["youtube","google","github","chatgpt"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"open_folder","description":"Open a common user folder.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["home","desktop","documents","downloads"]}},"required":["name"]}}},
@@ -184,6 +187,58 @@ def open_app(name: str) -> str:
         return f"Successfully opened {name}."
     except OSError as exc:
         return f"Failed to open {name}: {exc}"
+
+
+def browser_search(client: Groq, query: str) -> str:
+    query = str(query).strip()
+    if not query:
+        return "The browser search query is empty."
+    try:
+        shot = pyautogui.screenshot()
+        width, height = shot.size
+        from io import BytesIO
+        buf = BytesIO()
+        shot.convert("RGB").save(buf, format="JPEG", quality=82)
+        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        locator_prompt = (
+            "Locate the primary search field inside the currently visible webpage. "
+            "Do not select the browser address bar, URL bar, navigation, or unrelated form fields. "
+            "Return ONLY JSON: {\\"x\\": 123, \\"y\\": 456, \\"confidence\\": 0.0, \\"reason\\": \\"brief description\\"} "
+            f"using original screenshot pixels x=0..{width-1}, y=0..{height-1}. "
+            "If no clear webpage search field is visible, return x=-1, y=-1, confidence=0."
+        )
+        response = client.chat.completions.create(
+            model=VISION_MODEL,
+            messages=[{"role":"user","content":[
+                {"type":"text","text":locator_prompt},
+                {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{encoded}"}},
+            ]}],
+            temperature=0,
+            max_completion_tokens=180,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        clean = raw
+        if clean.startswith("```") and clean.endswith("```"):
+            clean = clean.strip("`").strip()
+            if clean.lower().startswith("json"):
+                clean = clean[4:].strip()
+        data = json.loads(clean)
+        x = int(data.get("x", -1))
+        y = int(data.get("y", -1))
+        confidence = float(data.get("confidence", 0))
+        if x < 0 or y < 0 or x >= width or y >= height or confidence < 0.45:
+            return "I could not confidently locate the webpage search field."
+        pyautogui.click(x, y)
+        time.sleep(0.15)
+        pyperclip.copy(query)
+        pyautogui.hotkey("ctrl", "a")
+        pyautogui.hotkey("ctrl", "v")
+        pyautogui.press("enter")
+        return f"Searched the current webpage for '{query}'."
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return f"The visual search locator returned invalid data: {exc}"
+    except Exception as exc:
+        return f"Failed to search the current webpage: {exc}"
 
 
 def search_web(query: str) -> str:
@@ -838,6 +893,10 @@ def run_tool(name: str, arguments: dict[str, Any], client: Groq | None = None) -
 
     if name == "open_app":
         return open_app(str(arguments["name"]))
+    if name == "browser_search":
+        if client is None:
+            return "Browser search is unavailable without an active Groq client."
+        return browser_search(client, str(arguments["query"]))
     if name == "launch_application":
         return launch_application(str(arguments["name"]))
     if name == "open_url":
