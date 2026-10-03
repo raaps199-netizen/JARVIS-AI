@@ -30,7 +30,6 @@ def _clear_console_keys() -> None:
 
 
 def _speech_interrupted() -> bool:
-    """ESC in the JARVIS console interrupts the current spoken response."""
     if os.name != "nt":
         return _interrupt_event.is_set()
     import msvcrt
@@ -41,42 +40,37 @@ def _speech_interrupted() -> bool:
             return True
     return _interrupt_event.is_set()
 
-for _voice in _fallback.getProperty("voices"):
-    _meta = f"{getattr(_voice, 'name', '')} {getattr(_voice, 'id', '')} {getattr(_voice, 'languages', '')}".lower()
-    if any(token in _meta for token in ("indonesia", "indonesian", "id-id", "id_id")):
-        _fallback.setProperty("voice", _voice.id)
-        break
-
 
 def _fallback_speak(text: str) -> None:
-    # Fresh engine per utterance avoids pyttsx3's "run loop already started"
-    # state after an interrupted Windows TTS run.
+    # Buat engine baru setiap utterance agar event loop pyttsx3 tidak bentrok.
     engine = pyttsx3.init()
     engine.setProperty("rate", 172)
     engine.setProperty("volume", 1.0)
+
     for voice in engine.getProperty("voices"):
         meta = f"{getattr(voice, 'name', '')} {getattr(voice, 'id', '')} {getattr(voice, 'languages', '')}".lower()
         if any(token in meta for token in ("indonesia", "indonesian", "id-id", "id_id")):
             engine.setProperty("voice", voice.id)
             break
 
-    # Keep each fallback utterance isolated. The previous implementation
-    # accidentally reused a pyttsx3 event loop, which causes "run loop already started".
     try:
         engine.say(text)
         engine.runAndWait()
     except RuntimeError as exc:
         print(f"[TTS] Windows TTS error: {exc}")
+    finally:
+        try:
+            engine.stop()
+        except Exception:
+            pass
 
 
 def _elevenlabs_speak(text: str) -> bool:
     global _elevenlabs_quota_exhausted
-    if _elevenlabs_quota_exhausted:
-        return False
-    if not ELEVENLABS_API_KEY:
+    if _elevenlabs_quota_exhausted or not ELEVENLABS_API_KEY:
         return False
     if not ELEVENLABS_API_KEY.startswith("sk_"):
-        print("[TTS] ELEVENLABS_API_KEY bukan secret key. Secret ElevenLabs harus diawali sk_.")
+        print("[TTS] ELEVENLABS_API_KEY bukan secret key.")
         return False
 
     payload = json.dumps({
@@ -107,7 +101,7 @@ def _elevenlabs_speak(text: str) -> bool:
             pcm = response.read()
 
         with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as stream:
-            chunk_size = 24000 * 2 // 4  # ~250 ms of mono int16 audio
+            chunk_size = 24000 * 2 // 4
             for start in range(0, len(pcm), chunk_size):
                 if _speech_interrupted():
                     stream.stop()
@@ -115,6 +109,7 @@ def _elevenlabs_speak(text: str) -> bool:
                     return True
                 stream.write(pcm[start:start + chunk_size])
         return True
+
     except HTTPError as exc:
         try:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -123,8 +118,9 @@ def _elevenlabs_speak(text: str) -> bool:
         print(f"[TTS] ElevenLabs gagal ({exc.code}): {detail[:500]}")
         if "quota_exceeded" in detail.lower() or "exceeds your quota" in detail.lower():
             _elevenlabs_quota_exhausted = True
-            print("[TTS] Kuota ElevenLabs habis. JARVIS beralih ke suara Windows untuk sesi ini.")
+            print("[TTS] Kuota ElevenLabs habis. Beralih ke Windows TTS.")
         return False
+
     except (URLError, OSError, sd.PortAudioError) as exc:
         print(f"[TTS] ElevenLabs gagal, fallback ke suara lokal: {exc}")
         return False
@@ -138,5 +134,6 @@ def speak(text: str) -> None:
     _interrupt_event.clear()
     _clear_console_keys()
     print(f"JARVIS: {text}")
+
     if not _elevenlabs_speak(text):
         _fallback_speak(text)
