@@ -95,6 +95,9 @@ const hint=document.getElementById("hint");
 let recognition=null;
 let isListening=false;
 let isStartingRecognition=false;
+let wakeMode=false;
+let awaitingCommand=false;
+let restartRecognition=false;
 let finalTranscript="";
 let speechQueue=[];
 let isSpeaking=false;
@@ -525,22 +528,47 @@ if(SpeechRecognition){
 
   recognition.onstart=()=>{
     isStartingRecognition=false;
-    stopSpeaking();
     isListening=true;
     finalTranscript="";
+    input.value="";
     mic.classList.add("recording");
     mic.textContent="⏹️";
-    hint.textContent="Lagi dengerin... klik ⏹️ untuk berhenti.";
+    hint.textContent=wakeMode
+      ? (awaitingCommand ? "JARVIS aktif. Silakan beri perintah..." : 'Mode panggil aktif. Ucapkan "Jarvis".')
+      : "Lagi dengerin satu perintah...";
   };
 
   recognition.onresult=event=>{
-    // Satu klik = satu hasil ucapan. Jangan gabungkan ulang semua hasil lama
-    // karena beberapa browser Android mengirim ulang result yang sudah final.
     const result=event.results[event.resultIndex];
-    if(result && result.isFinal){
-      finalTranscript=result[0].transcript.trim();
-      input.value=finalTranscript;
+    if(!result || !result.isFinal) return;
+    const transcript=result[0].transcript.trim();
+    const normalized=transcript.toLowerCase().replace(/[^a-z0-9\\s]/g," ").trim();
+
+    if(wakeMode && !awaitingCommand){
+      if(/\\b(jarvis|jarvisnya|jervis)\\b/i.test(normalized)){
+        awaitingCommand=true;
+        hint.textContent="JARVIS siap. Sebutkan perintah lu.";
+        addMessage("Ya, gue denger. Ada perintah?","assistant");
+      }
+      return;
     }
+
+    if(wakeMode && awaitingCommand){
+      if(!normalized) return;
+      awaitingCommand=false;
+      wakeMode=false;
+      restartRecognition=false;
+      isListening=false;
+      try{ recognition.stop(); }catch(error){}
+      mic.classList.remove("recording");
+      mic.textContent="🎙️";
+      hint.textContent="Mengirim perintah ke JARVIS...";
+      sendMessage(transcript);
+      return;
+    }
+
+    finalTranscript=transcript;
+    input.value=finalTranscript;
   };
 
   recognition.onerror=event=>{
@@ -559,15 +587,32 @@ if(SpeechRecognition){
 
   recognition.onend=()=>{
     isStartingRecognition=false;
-    if(!isListening) return;
-
     isListening=false;
+
+    if(wakeMode){
+      // Android/Chrome may end speech recognition automatically; restart while armed.
+      mic.classList.add("recording");
+      mic.textContent="⏹️";
+      hint.textContent=awaitingCommand
+        ? "JARVIS aktif. Silakan beri perintah..."
+        : 'Mode panggil aktif. Ucapkan "Jarvis".';
+      if(restartRecognition){
+        restartRecognition=false;
+        try{
+          isStartingRecognition=true;
+          recognition.start();
+        }catch(error){
+          isStartingRecognition=false;
+          hint.textContent="Browser menghentikan mode panggil. Tekan mikrofon untuk mengaktifkannya lagi.";
+        }
+      }
+      return;
+    }
+
     mic.classList.remove("recording");
     mic.textContent="🎙️";
-
     const message=input.value.trim();
     input.value="";
-
     if(message){
       hint.textContent="Mengirim ke JARVIS...";
       sendMessage(message);
@@ -577,22 +622,31 @@ if(SpeechRecognition){
   };
 
   mic.addEventListener("click",()=>{
-    if(isListening){
+    if(isListening || wakeMode){
+      wakeMode=false;
+      awaitingCommand=false;
+      restartRecognition=false;
       isListening=false;
       try{ recognition.stop(); }catch(error){}
+      mic.classList.remove("recording");
+      mic.textContent="🎙️";
+      hint.textContent="Mode panggil dimatikan.";
       return;
     }
-
-    // Browser dapat masih menganggap recognition aktif sesaat setelah stop/onend.
     if(isStartingRecognition) return;
 
     try{
       stopSpeaking();
       input.value="";
       finalTranscript="";
+      wakeMode=true;
+      awaitingCommand=false;
+      restartRecognition=true;
       isStartingRecognition=true;
       recognition.start();
     }catch(error){
+      wakeMode=false;
+      restartRecognition=false;
       isStartingRecognition=false;
       if(error.name==="InvalidStateError"){
         hint.textContent="Mikrofon masih memproses sesi sebelumnya. Tunggu sebentar lalu coba lagi.";
