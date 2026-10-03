@@ -19,6 +19,7 @@ load_dotenv()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = os.getenv("JARVIS_MODEL", "gpt-6-luna")
+TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 
 SYSTEM_PROMPT = """
 You are JARVIS, a personal AI assistant for an Indonesian student.
@@ -50,6 +51,7 @@ STYLE:
 - For technical problems, prioritize a clear diagnosis and the exact next action.
 """
 
+
 def create_client() -> OpenAI:
     if not API_KEY:
         raise RuntimeError(
@@ -66,6 +68,15 @@ def ask_jarvis(client: OpenAI, user_message: str) -> str:
         input=user_message,
     )
     return response.output_text.strip()
+
+
+def transcribe_audio(client: OpenAI, audio_file):
+    transcript = client.audio.transcriptions.create(
+        model=TRANSCRIPTION_MODEL,
+        file=audio_file,
+        language="id",
+    )
+    return transcript.text.strip()
 
 
 # Vercel detects this top-level Flask app automatically.
@@ -113,6 +124,29 @@ def chat():
     try:
         reply = ask_jarvis(client, message)
         return jsonify({"reply": reply})
+    except Exception as error:
+        return jsonify({"error": str(error)}), 500
+
+
+@app.post("/api/transcribe")
+def transcribe():
+    global client, startup_error
+
+    if client is None:
+        try:
+            client = create_client()
+            startup_error = None
+        except Exception as error:
+            startup_error = str(error)
+            return jsonify({"error": startup_error}), 500
+
+    audio = request.files.get("audio")
+    if audio is None:
+        return jsonify({"error": "File audio tidak ditemukan."}), 400
+
+    try:
+        transcript = transcribe_audio(client, audio)
+        return jsonify({"text": transcript})
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
