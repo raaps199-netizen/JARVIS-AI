@@ -66,7 +66,7 @@ def chat_create(client: Any, **kwargs):
         extra_body = dict(kwargs.pop("extra_body", {}) or {})
         extra_body["think"] = False
         kwargs["extra_body"] = extra_body
-    return chat_create(client, **kwargs)
+    return client.chat.completions.create(**kwargs)
 
 
 SYSTEM_PROMPT = """
