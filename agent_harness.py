@@ -1363,7 +1363,7 @@ def record_audio(path: Path) -> None:
         wav.writeframes(recording.tobytes())
 
 
-def try_direct_command(text: str) -> str | None:
+def try_direct_command(text: str, client: Groq | None = None) -> str | None:
     normalized = " ".join(text.lower().strip().split())
     # Whisper/Groq can mishear "Jarvis" as "Jervis", "Yervis", or "Surface".
     # Treat these common wake-name variants as the same command prefix.
@@ -1511,6 +1511,33 @@ def try_direct_command(text: str) -> str | None:
     if normalized in key_aliases:
         result = press_key(key_aliases[normalized])
         print(f"[DIRECT] press_key -> {result}")
+        return result
+
+
+    # Search inside the current webpage's search field. This is deliberately
+    # handled before the generic web-search shortcut so "search X in the search
+    # bar" never gets redirected to Google.
+    page_search_query = None
+    page_search_prefixes = (
+        "search in the search bar ", "search the search bar for ",
+        "search in youtube for ", "search youtube for ", "search yt for ",
+        "cari di search bar ", "cari di kolom pencarian ",
+        "cari di kolom search ", "cari di youtube ", "cari di yt ",
+    )
+    for prefix in page_search_prefixes:
+        if normalized.startswith(prefix):
+            page_search_query = normalized[len(prefix):].strip()
+            break
+    if page_search_query is None:
+        for suffix in (" in the search bar", " in search bar", " di search bar", " di kolom pencarian"):
+            if normalized.endswith(suffix) and normalized[:-len(suffix)].strip():
+                candidate = normalized[:-len(suffix)].strip()
+                if candidate.startswith(("search ", "cari ")):
+                    page_search_query = candidate.split(" ", 1)[1].strip()
+                break
+    if page_search_query and client is not None:
+        result = browser_search(client, page_search_query)
+        print(f"[DIRECT] browser_search -> {result}")
         return result
 
     search_prefixes = (
@@ -1670,7 +1697,7 @@ def main() -> None:
                 speak("Understood, Sir. Shutting down the JARVIS system.")
                 return
 
-            direct_reply = try_direct_command(heard)
+            direct_reply = try_direct_command(heard, client)
             if direct_reply is not None:
                 if direct_reply == "__JARVIS_STOP__":
                     print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
