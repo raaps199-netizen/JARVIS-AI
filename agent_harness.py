@@ -340,9 +340,6 @@ def close_app(name: str) -> str:
         title = title_buffer.value.strip().lower()
 
         matched = process_name == target
-
-        # Windows 10/11 Calculator is sometimes hosted by
-        # ApplicationFrameHost.exe. Match its Calculator window by title.
         if name == "calculator" and process_name == "applicationframehost.exe":
             matched = title in {"calculator", "kalkulator"} or "calculator" in title
 
@@ -352,33 +349,61 @@ def close_app(name: str) -> str:
 
     user32.EnumWindows(enum_window, 0)
 
-    if not matches:
-        return f"{name} tidak ditemukan sebagai jendela aktif."
-
-    closed = False
+    # First request a normal window close.
     for hwnd in matches:
-        # First try the normal close message.
-        if user32.PostMessageW(hwnd, WM_CLOSE, 0, 0):
-            closed = True
-            continue
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
 
-        # Fallback for hosted Windows app windows.
-        if user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0):
-            closed = True
+    time.sleep(0.7)
 
-    if closed:
-        # Give Windows a moment to process the close request, then verify.
-        time.sleep(0.5)
-        still_open = []
-        for hwnd in matches:
-            if user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd):
-                still_open.append(hwnd)
+    def calculator_window_exists() -> bool:
+        found = []
+        @EnumWindowsProc
+        def check_window(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            process_name = _windows_process_name_from_hwnd(hwnd)
+            title_buffer = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, title_buffer, 512)
+            title = title_buffer.value.strip().lower()
+            if process_name == "calculatorapp.exe":
+                found.append(hwnd)
+            elif (
+                name == "calculator"
+                and process_name == "applicationframehost.exe"
+                and (title in {"calculator", "kalkulator"} or "calculator" in title)
+            ):
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(check_window, 0)
+        return bool(found)
 
-        if not still_open:
-            return f"Berhasil menutup {name}."
-        return f"Perintah menutup {name} sudah dikirim, tetapi Windows belum menutup jendelanya."
+    if name == "calculator" and calculator_window_exists():
+        # Calculator may be hosted by ApplicationFrameHost and ignore WM_CLOSE.
+        # Use an exact Calculator window-title filter so we never close the
+        # currently focused unrelated application.
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/FI", "WINDOWTITLE eq Calculator"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as exc:
+            print(f"[CLOSE] Calculator fallback failed: {exc}")
 
-    return f"Gagal mengirim perintah menutup {name}."
+        time.sleep(0.8)
+
+    if name == "calculator" and calculator_window_exists():
+        return "Saya menemukan Kalkulator, tetapi Windows tidak menutup jendelanya."
+
+    if not matches and name != "calculator":
+        return f"{name} tidak sedang terbuka."
+
+    return f"Berhasil menutup {name}."
+
+
 
 
 def close_active_window() -> str:
@@ -758,9 +783,17 @@ def main() -> None:
             }
 
             shutdown_words = set(normalized.split())
+            has_app_target = bool(shutdown_words & {
+                "kalkulator", "calculator", "notepad", "chrome", "word",
+                "vscode", "explorer", "aplikasi", "jendela"
+            })
             shutdown_intent = (
                 normalized in shutdown_phrases
-                or (("matikan" in shutdown_words) and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"}))
+                or (
+                    not has_app_target
+                    and ("matikan" in shutdown_words)
+                    and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"})
+                )
                 or normalized.startswith("matikan diri")
                 or normalized.startswith("stop jarvis")
                 or normalized.startswith("stop jervis")
