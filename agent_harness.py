@@ -821,10 +821,15 @@ def main() -> None:
                     break
                 if reply:
                     speak(reply)
+            except KeyboardInterrupt:
+                print("\n[JARVIS] Dihentikan dari keyboard.")
+                break
             except Exception as exc:
                 print(f"[AGENT] {exc}")
                 speak("Saya gagal memproses permintaan itu, Sir. Periksa log terminal.")
 
+    except KeyboardInterrupt:
+        print("\n[JARVIS] Dihentikan dari keyboard.")
     finally:
         try:
             audio_path.unlink(missing_ok=True)
