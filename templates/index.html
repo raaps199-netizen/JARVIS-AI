@@ -202,12 +202,36 @@ async function musicSearch(query){
     const data=await res.json();
     const tracks=(data.data||[]).filter(track=>track.is_streamable !== false);
 
-    if(!tracks.length){
-      addMessage("🎵 Lagu itu nggak ketemu di katalog Audius. Gue nggak bakal pura-pura nemu, karena itu cara tercepat bikin JARVIS jadi tukang bohong.","assistant");
+    // Jangan asal memutar hasil pertama. Ranking ulang berdasarkan judul dan artis.
+    const normalize=value=>(value||"").toLowerCase()
+      .normalize("NFD").replace(/[\\u0300-\\u036f]/g,"")
+      .replace(/[^a-z0-9\\s]/g," ").replace(/\\s+/g," ").trim();
+    const wanted=normalize(cleanQuery);
+    const wantedWords=wanted.split(" ").filter(word=>word.length>1);
+    const ranked=tracks.map(track=>{
+      const title=normalize(track.title);
+      const artist=normalize(track.user && track.user.name);
+      let score=0;
+
+      if(title===wanted) score+=1000;
+      else if(title.includes(wanted)) score+=700;
+      else if(wanted.includes(title) && title.length>=3) score+=450;
+
+      for(const word of wantedWords){
+        if(title.split(" ").includes(word)) score+=100;
+        else if(title.includes(word)) score+=50;
+        if(artist.split(" ").includes(word)) score+=20;
+      }
+
+      return {track,score};
+    }).sort((a,b)=>b.score-a.score);
+
+    if(!ranked.length || ranked[0].score===0){
+      addMessage("🎵 Gue nggak nemu kecocokan judul yang cukup jelas untuk “"+cleanQuery+"” di Audius, jadi nggak gue putar lagu random. Katalog Audius memang terbatas.","assistant");
       return false;
     }
 
-    const track=tracks[0];
+    const track=ranked[0].track;
     const streamUrl=AUDIUS_API+"/tracks/"+encodeURIComponent(track.id)+"/stream?app_name="+encodeURIComponent(AUDIUS_APP);
 
     audio.src=streamUrl;
