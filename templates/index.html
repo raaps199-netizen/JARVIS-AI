@@ -131,8 +131,11 @@ function addMessage(text,role){
 
 let ttsAudio=null;
 let ttsObjectUrl=null;
+let speechPrefetch=null;
+let speechGeneration=0;
 
 function stopSpeaking(){
+  speechGeneration++;
   if("speechSynthesis" in window) window.speechSynthesis.cancel();
   if(ttsAudio){
     ttsAudio.onended=null;
@@ -147,9 +150,26 @@ function stopSpeaking(){
   }
   speechQueue=[];
   speechBuffer="";
+  speechPrefetch=null;
   isSpeaking=false;
 }
 
+async function fetchSpeechBlob(text){
+  const response=await fetch("/api/tts",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({text})
+  });
+  if(!response.ok){
+    let detail="ElevenLabs TTS gagal ("+response.status+").";
+    try{
+      const data=await response.json();
+      detail=data.error || detail;
+    }catch(error){}
+    throw new Error(detail);
+  }
+  return response.blob();
+}
 
 function cleanSpeechText(text){
   return text
@@ -184,50 +204,46 @@ function getJarvisVoice(){
 }
 
 async function speakNext(){
-  if(voiceMuted || isSpeaking || speechQueue.length===0) return;
+  if(voiceMuted || isSpeaking) return;
+  if(!speechPrefetch && speechQueue.length){
+    const nextText=cleanSpeechText(speechQueue.shift());
+    if(nextText) speechPrefetch={text:nextText,generation:speechGeneration,promise:fetchSpeechBlob(nextText)};
+  }
+  if(!speechPrefetch) return;
 
   isSpeaking=true;
-  const text=cleanSpeechText(speechQueue.shift());
-  if(!text){
-    isSpeaking=false;
-    speakNext();
-    return;
-  }
+  const current=speechPrefetch;
+  speechPrefetch=null;
+  const generation=current.generation;
 
   try{
-    const response=await fetch("/api/tts",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({text})
-    });
-    if(!response.ok){
-      let detail="ElevenLabs TTS gagal ("+response.status+").";
-      try{
-        const data=await response.json();
-        detail=data.error || detail;
-      }catch(error){}
-      throw new Error(detail);
-    }
-
-    const blob=await response.blob();
-    if(voiceMuted){
+    const blob=await current.promise;
+    if(generation!==speechGeneration || voiceMuted){
       isSpeaking=false;
       return;
     }
-    if(ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
+
+    // Generate the following chunk while this chunk is playing, hiding most
+    // of ElevenLabs' request latency between sentences.
+    if(!speechPrefetch && speechQueue.length){
+      const nextText=cleanSpeechText(speechQueue.shift());
+      if(nextText) speechPrefetch={text:nextText,generation:speechGeneration,promise:fetchSpeechBlob(nextText)};
+    }
+
     ttsObjectUrl=URL.createObjectURL(blob);
-    ttsAudio=new Audio(ttsObjectUrl);
+    const objectUrl=ttsObjectUrl;
+    ttsAudio=new Audio(objectUrl);
     ttsAudio.preload="auto";
     ttsAudio.onended=()=>{
-      if(ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
-      ttsObjectUrl=null;
+      if(objectUrl) URL.revokeObjectURL(objectUrl);
+      if(ttsObjectUrl===objectUrl) ttsObjectUrl=null;
       ttsAudio=null;
       isSpeaking=false;
       speakNext();
     };
     ttsAudio.onerror=()=>{
-      if(ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
-      ttsObjectUrl=null;
+      if(objectUrl) URL.revokeObjectURL(objectUrl);
+      if(ttsObjectUrl===objectUrl) ttsObjectUrl=null;
       ttsAudio=null;
       isSpeaking=false;
       addMessage("Suara ElevenLabs gagal diputar di browser.","assistant");
@@ -235,9 +251,11 @@ async function speakNext(){
     };
     await ttsAudio.play();
   }catch(error){
+    if(generation!==speechGeneration) return;
     isSpeaking=false;
     addMessage("TTS error: "+error.message,"assistant");
     speechQueue=[];
+    speechPrefetch=null;
     speechBuffer="";
     if(voiceMode && !voiceMuted){
       hint.textContent="Periksa ELEVENLABS_API_KEY dan ELEVENLABS_VOICE_ID di Vercel.";
