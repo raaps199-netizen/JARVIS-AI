@@ -22,16 +22,15 @@ from typing import Any
 import sounddevice as sd
 import speech_recognition as sr
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from groq import Groq
 
 from jarvis_tts import speak
 
 load_dotenv()
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-STT_MODEL = os.getenv("GEMINI_STT_MODEL", MODEL)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 MIN_RECORD_SECONDS = 0.35
@@ -89,125 +88,16 @@ FOLDERS = {
 }
 
 TOOL_DECLARATIONS = [
-    {
-        "name": "open_app",
-        "description": "Open an approved Windows application.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "enum": [
-                        "notepad", "calculator", "chrome", "vscode", "word",
-                        "explorer", "task manager", "settings",
-                    ],
-                }
-            },
-            "required": ["name"],
-        },
-    },
-    {
-        "name": "search_web",
-        "description": "Search the web using Google for the user's requested topic. Use this when the user asks to search, find, look up, or research something online.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"}
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "open_site",
-        "description": "Open an approved website in the default browser.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "enum": ["youtube", "google", "github", "chatgpt"],
-                }
-            },
-            "required": ["name"],
-        },
-    },
-    {
-        "name": "open_folder",
-        "description": "Open a common user folder in Windows Explorer.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "enum": ["home", "desktop", "documents", "downloads"],
-                }
-            },
-            "required": ["name"],
-        },
-    },
-    {
-        "name": "type_text",
-        "description": "Type exact text into the currently focused desktop application when the user explicitly asks.",
-        "parameters": {
-            "type": "object",
-            "properties": {"text": {"type": "string"}},
-            "required": ["text"],
-        },
-    },
-    {
-        "name": "press_key",
-        "description": "Press an allowlisted keyboard key or shortcut.",
-        "parameters": {
-            "type": "object",
-            "properties": {"key": {"type": "string"}},
-            "required": ["key"],
-        },
-    },
-    {
-        "name": "pc_status",
-        "description": "Read basic non-sensitive computer status.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-        },
-    },
+    {"type":"function","function":{"name":"open_app","description":"Open an approved Windows application.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["notepad","calculator","chrome","vscode","word","explorer","task manager","settings"]}},"required":["name"]}}},
+    {"type":"function","function":{"name":"search_web","description":"Search Google for a requested topic.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
+    {"type":"function","function":{"name":"open_site","description":"Open an approved website.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["youtube","google","github","chatgpt"]}},"required":["name"]}}},
+    {"type":"function","function":{"name":"open_folder","description":"Open a common user folder.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["home","desktop","documents","downloads"]}},"required":["name"]}}},
+    {"type":"function","function":{"name":"type_text","description":"Type exact text into the currently focused desktop application when explicitly requested.","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"press_key","description":"Press an allowlisted keyboard key or shortcut.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}},
+    {"type":"function","function":{"name":"pc_status","description":"Read basic non-sensitive computer status.","parameters":{"type":"object","properties":{}}}}
 ]
 
-TOOLS = [types.Tool(function_declarations=TOOL_DECLARATIONS)]
-
-
-def type_text(text: str) -> str:
-    text = str(text)
-    if not text.strip():
-        return "Teks kosong."
-    try:
-        pyperclip.copy(text)
-        pyautogui.hotkey("ctrl", "v")
-        return "Teks berhasil diketik ke jendela aktif."
-    except Exception as exc:
-        return f"Gagal mengetik teks: {exc}"
-
-
-def press_key(key: str) -> str:
-    allowed = {
-        "enter", "esc", "escape", "tab", "backspace", "delete",
-        "space", "home", "end", "up", "down", "left", "right",
-        "ctrl+s", "ctrl+n", "ctrl+a", "ctrl+c", "ctrl+v", "ctrl+z",
-        "alt+f4",
-    }
-    key = str(key).lower().strip()
-    if key not in allowed:
-        return "Tombol itu belum diizinkan."
-    try:
-        if "+" in key:
-            pyautogui.hotkey(*key.split("+"))
-        else:
-            pyautogui.press(key)
-        return f"Tombol {key} berhasil dijalankan."
-    except Exception as exc:
-        return f"Gagal menjalankan tombol: {exc}"
-
-
+TOOLS = TOOL_DECLARATIONS
 
 
 def open_app(name: str) -> str:
@@ -285,68 +175,40 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
     return f"Tool {name} tidak dikenal."
 
 
-def _gemini_generate(client: genai.Client, *, model: str, contents: Any, config: Any):
-    last_error = None
-    for attempt in range(3):
-        try:
-            return client.models.generate_content(model=model, contents=contents, config=config)
-        except Exception as exc:
-            last_error = exc
-            message = str(exc).upper()
-            # Daily free-tier quota errors do not recover by retrying a few seconds later.
-            if "429" in message and ("QUOTA" in message or "RESOURCE_EXHAUSTED" in message or "RETRYDELAY" in message):
-                raise
-            if "503" not in message and "UNAVAILABLE" not in message and "429" not in message:
-                raise
-            wait = 2 * (attempt + 1)
-            print(f"[GEMINI] Layanan sibuk ({attempt + 1}/3), retry {wait} detik...")
-            time.sleep(wait)
-    raise last_error
-
-
-def ask_agent(client: genai.Client, user_text: str) -> str:
-    contents = [
-        types.Content(
-            role="user",
-            parts=[types.Part(text=user_text)],
-        )
+def ask_agent(client: Groq, user_text: str) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_text},
     ]
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
-        tools=TOOLS,
-        temperature=0.7,
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-    )
 
-    for _ in range(5):
-        response = _gemini_generate(client, model=MODEL, contents=contents, config=config)
+    for _ in range(6):
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+            temperature=0.4,
+        )
+        message = response.choices[0].message
 
-        calls = response.function_calls or []
-        if not calls:
-            return (response.text or "").strip()
+        if not message.tool_calls:
+            return (message.content or "").strip()
 
-        contents.append(response.candidates[0].content)
+        messages.append(message)
 
-        for call in calls:
+        for tool_call in message.tool_calls:
             try:
-                arguments = dict(call.args or {})
-                result = run_tool(call.name, arguments)
+                arguments = json.loads(tool_call.function.arguments or "{}")
+                result = run_tool(tool_call.function.name, arguments)
             except Exception as exc:
                 result = f"Tool error: {exc}"
 
-            print(f"[TOOL] {call.name} -> {result}")
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_function_response(
-                            name=call.name,
-                            response={"result": result},
-                            id=getattr(call, "id", None),
-                        )
-                    ],
-                )
-            )
+            print(f"[TOOL] {tool_call.function.name} -> {result}")
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result,
+            })
 
     return "Saya berhenti setelah beberapa langkah tool agar tidak masuk loop."
 
@@ -517,53 +379,31 @@ def try_direct_command(text: str) -> str | None:
     return None
 
 
-def transcribe(client: genai.Client, path: Path) -> str:
-    # Local Google Speech first: fast and independent of Gemini availability.
-    # Gemini remains the fallback for cases where Google cannot recognize the audio.
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(str(path)) as source:
-        audio = recognizer.record(source)
-
+def transcribe(client: Groq, path: Path) -> str:
     try:
-        text = recognizer.recognize_google(audio, language="id-ID")
-        text = text.strip()
+        with open(path, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                file=(path.name, audio_file.read()),
+                model=STT_MODEL,
+                language="id",
+                response_format="text",
+                temperature=0,
+            )
+        text = str(transcription).strip()
         if text:
-            print(f"[STT] Google: {text}")
-            return text
-    except sr.UnknownValueError:
-        pass
-    except sr.RequestError as exc:
-        print(f"[STT] Google Speech gagal: {exc}")
-
-    try:
-        audio_bytes = path.read_bytes()
-        response = _gemini_generate(
-            client,
-            model=STT_MODEL,
-            contents=[
-                types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
-                types.Part(
-                    text=(
-                        "Transkripsikan audio ini ke teks bahasa Indonesia. "
-                        "Tulis hanya apa yang diucapkan, tanpa penjelasan tambahan. "
-                        "Kalau tidak ada ucapan yang jelas, balas kosong."
-                    )
-                ),
-            ],
-            config=types.GenerateContentConfig(temperature=0),
-        )
-        return (response.text or "").strip()
+            print(f"[STT] Groq: {text}")
+        return text
     except Exception as exc:
-        print(f"[STT] Gemini fallback gagal: {exc}")
+        print(f"[STT] Groq gagal: {exc}")
         return ""
 
 
 def main() -> None:
-    if not GEMINI_API_KEY:
-        print("GEMINI_API_KEY belum diatur.")
+    if not GROQ_API_KEY:
+        print("GROQ_API_KEY belum diatur.")
         return
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = Groq(api_key=GROQ_API_KEY)
     speak("Sistem aktif, Sir. Saya siap mendengarkan.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
 
@@ -579,7 +419,7 @@ def main() -> None:
                 continue
             except Exception as exc:
                 print(f"[STT] {exc}")
-                speak("Pengenalan suara gagal. Periksa koneksi dan Gemini API key.")
+                speak("Pengenalan suara gagal. Periksa koneksi dan GROQ API key.")
                 time.sleep(2)
                 continue
 
