@@ -200,20 +200,36 @@ function speakNext(){
 }
 
 function queueSpeech(text,flush=false){
-  speechBuffer += cleanSpeechText(text);
+  // Keep raw streamed text intact; cleaning each tiny delta can strip spaces.
+  speechBuffer += text;
 
-  const parts=speechBuffer.split(/(?<=[.!?。！？])\s+/);
+  while(speechBuffer.trim()){
+    let cutAt = -1;
+    const sentenceEnd = /[.!?。！？]["')\\]]*\\s+/.exec(speechBuffer);
 
-  if(parts.length>1){
-    speechBuffer=parts.pop();
-    for(const part of parts){
-      if(part.trim()) speechQueue.push(part.trim());
+    // Speak a sentence as soon as it arrives. For long sentences, start sooner.
+    if(sentenceEnd){
+      cutAt = sentenceEnd.index + sentenceEnd[0].length;
+    }else if(speechBuffer.length >= 48){
+      const comma = /[,;:]\\s+/.exec(speechBuffer);
+      if(comma && comma.index < 72){
+        cutAt = comma.index + comma[0].length;
+      }else if(speechBuffer.length >= 88){
+        const boundary = speechBuffer.lastIndexOf(" ", 88);
+        if(boundary >= 35) cutAt = boundary + 1;
+      }
     }
+
+    if(cutAt < 0) break;
+    const chunk = cleanSpeechText(speechBuffer.slice(0,cutAt));
+    speechBuffer = speechBuffer.slice(cutAt);
+    if(chunk) speechQueue.push(chunk);
     speakNext();
   }
 
   if(flush && speechBuffer.trim()){
-    speechQueue.push(speechBuffer.trim());
+    const finalChunk = cleanSpeechText(speechBuffer);
+    if(finalChunk) speechQueue.push(finalChunk);
     speechBuffer="";
     speakNext();
   }
