@@ -1374,14 +1374,14 @@ def try_direct_command(text: str, client: Groq | None = None) -> str | None:
             normalized = normalized[len(prefix):].strip()
 
     site_aliases = {
-        "youtube": "youtube", "yt": "youtube", "google": "google",
-        "github": "github", "chatgpt": "chatgpt",
+        "youtube": "youtube", "yt": "youtube", "you tube": "youtube",
+        "google": "google", "github": "github", "chatgpt": "chatgpt",
     }
 
     app_aliases = {
         "chrome": "chrome",
         "google chrome": "chrome",
-        "notepad": "notepad",
+        "notepad": "notepad", "notepad app": "notepad", "note pad": "notepad", "not pad": "notepad",
         "kalkulator": "calculator",
         "calculator": "calculator",
         "explorer": "explorer",
@@ -1407,6 +1407,17 @@ def try_direct_command(text: str, client: Groq | None = None) -> str | None:
             print(f"[DIRECT] open_site -> {result}")
             return result
 
+    if normalized.startswith("buka "):
+        target = normalized[5:].strip()
+        if target in app_aliases:
+            result = open_app(app_aliases[target])
+            print(f"[DIRECT] open_app -> {result}")
+            return result
+        if target in site_aliases:
+            result = open_site(site_aliases[target])
+            print(f"[DIRECT] open_site -> {result}")
+            return result
+
     if normalized.startswith("launch "):
         target = normalized[7:].strip()
         if target in app_aliases:
@@ -1419,6 +1430,15 @@ def try_direct_command(text: str, client: Groq | None = None) -> str | None:
         result = open_app(app)
         print(f"[DIRECT] open_app -> {result}")
         return result
+
+    # Common short browser commands should bypass the LLM to save tokens.
+    for marker in ("search youtube for ", "search yt for ", "cari di youtube ", "cari di yt "):
+        if normalized.startswith(marker):
+            query = normalized[len(marker):].strip()
+            if query and client is not None:
+                result = browser_search(client, query)
+                print(f"[DIRECT] browser_search -> {result}")
+                return result
 
     # Common English combined browser commands that should not spend an
     # agent turn when the user explicitly asks for a known site + Google search.
