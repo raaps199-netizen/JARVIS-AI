@@ -13,6 +13,8 @@ import subprocess
 import time
 import wave
 import webbrowser
+import pyautogui
+import pyperclip
 from urllib.parse import quote_plus
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,7 @@ SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 MIN_RECORD_SECONDS = 0.35
 SILENCE_SECONDS = 0.65
+UI_DELAY_SECONDS = 0.8
 START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
 
@@ -143,6 +146,24 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "type_text",
+        "description": "Type exact text into the currently focused desktop application when the user explicitly asks.",
+        "parameters": {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "press_key",
+        "description": "Press an allowlisted keyboard key or shortcut.",
+        "parameters": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    },
+    {
         "name": "pc_status",
         "description": "Read basic non-sensitive computer status.",
         "parameters": {
@@ -153,6 +174,40 @@ TOOL_DECLARATIONS = [
 ]
 
 TOOLS = [types.Tool(function_declarations=TOOL_DECLARATIONS)]
+
+
+def type_text(text: str) -> str:
+    text = str(text)
+    if not text.strip():
+        return "Teks kosong."
+    try:
+        pyperclip.copy(text)
+        pyautogui.hotkey("ctrl", "v")
+        return "Teks berhasil diketik ke jendela aktif."
+    except Exception as exc:
+        return f"Gagal mengetik teks: {exc}"
+
+
+def press_key(key: str) -> str:
+    allowed = {
+        "enter", "esc", "escape", "tab", "backspace", "delete",
+        "space", "home", "end", "up", "down", "left", "right",
+        "ctrl+s", "ctrl+n", "ctrl+a", "ctrl+c", "ctrl+v", "ctrl+z",
+        "alt+f4",
+    }
+    key = str(key).lower().strip()
+    if key not in allowed:
+        return "Tombol itu belum diizinkan."
+    try:
+        if "+" in key:
+            pyautogui.hotkey(*key.split("+"))
+        else:
+            pyautogui.press(key)
+        return f"Tombol {key} berhasil dijalankan."
+    except Exception as exc:
+        return f"Gagal menjalankan tombol: {exc}"
+
+
 
 
 def open_app(name: str) -> str:
@@ -219,6 +274,12 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return open_site(str(arguments["name"]))
     if name == "open_folder":
         return open_folder(str(arguments["name"]))
+    if name == "type_text":
+        return type_text(str(arguments["text"]))
+    if name == "press_key":
+        return press_key(str(arguments["key"]))
+    if name == "pc_status":
+        return pc_status()
     if name == "pc_status":
         return pc_status()
     return f"Tool {name} tidak dikenal."
@@ -393,6 +454,42 @@ def try_direct_command(text: str) -> str | None:
                     result = f"{open_result} {search_result}"
                     print(f"[DIRECT] chrome search -> {result}")
                     return result
+
+    typing_prefixes = ("ketik ", "tulis ", "ketikkan ")
+    for prefix in typing_prefixes:
+        if normalized.startswith(prefix):
+            text = normalized[len(prefix):].strip()
+            if text:
+                result = type_text(text)
+                print(f"[DIRECT] type_text -> {result}")
+                return result
+
+    action_markers = (" dan ketik ", " lalu ketik ", " terus ketik ", " dan tulis ", " lalu tulis ")
+    if normalized.startswith("buka "):
+        for marker in action_markers:
+            if marker in normalized:
+                app_part, text = normalized[5:].split(marker, 1)
+                app = app_aliases.get(app_part.strip())
+                text = text.strip()
+                if app and text:
+                    open_result = open_app(app)
+                    time.sleep(UI_DELAY_SECONDS)
+                    type_result = type_text(text)
+                    result = f"{open_result} {type_result}"
+                    print(f"[DIRECT] open + type -> {result}")
+                    return result
+
+    key_aliases = {
+        "enter": "enter", "tekan enter": "enter", "escape": "esc", "esc": "esc",
+        "tab": "tab", "hapus": "backspace", "backspace": "backspace",
+        "ctrl s": "ctrl+s", "ctrl n": "ctrl+n", "ctrl a": "ctrl+a",
+        "ctrl c": "ctrl+c", "ctrl v": "ctrl+v", "ctrl z": "ctrl+z",
+        "alt f4": "alt+f4",
+    }
+    if normalized in key_aliases:
+        result = press_key(key_aliases[normalized])
+        print(f"[DIRECT] press_key -> {result}")
+        return result
 
     search_prefixes = (
         "cari tentang ",
