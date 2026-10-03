@@ -95,7 +95,7 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"type_text","description":"Type exact text into the currently focused desktop application when explicitly requested.","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"press_key","description":"Press an allowlisted keyboard key or shortcut.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}},
     {"type":"function","function":{"name":"close_active_window","description":"Close the currently focused Windows application/window using Alt+F4.","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"close_app","description":"Close one specific approved application by its process/window, without closing whichever unrelated window happens to be focused.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["notepad","calculator","chrome","vscode","word","explorer","task manager"]}},"required":["name"]}}},
+    {"type":"function","function":{"name":"close_app","description":"Close one specific approved application by its process/window, without closing whichever unrelated window happens to be focused. Use this whenever the user names a specific application to close.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["notepad","calculator","chrome","vscode","word","explorer","task manager"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"stop_jarvis","description":"Stop JARVIS listening and end the current assistant process when the user explicitly asks JARVIS to stop or turn itself off.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"pc_status","description":"Read basic non-sensitive computer status.","parameters":{"type":"object","properties":{}}}}
 ]
@@ -452,7 +452,9 @@ def record_audio(path: Path) -> None:
 
 def try_direct_command(text: str) -> str | None:
     normalized = " ".join(text.lower().strip().split())
-    prefixes = ("tolong ", "jarvis ", "bisa ")
+    # Whisper/Groq can mishear "Jarvis" as "Jervis", "Yervis", or "Surface".
+    # Treat these common wake-name variants as the same command prefix.
+    prefixes = ("tolong ", "jarvis ", "jervis ", "yervis ", "surface ", "sir ", "bisa ")
 
     for prefix in prefixes:
         if normalized.startswith(prefix):
@@ -497,10 +499,23 @@ def try_direct_command(text: str) -> str | None:
                     print(f"[DIRECT] chrome search -> {result}")
                     return result
 
+    intro_phrases = {
+        "ceritain tentang diri lu", "ceritakan tentang diri lu",
+        "ceritain tentang diri lo", "ceritakan tentang diri lo",
+        "kenalin diri lu", "kenalkan diri lu", "kenalin diri lo", "kenalkan diri lo",
+        "ceritain tentang diri kamu", "ceritakan tentang diri kamu",
+        "siapa kamu", "lu siapa", "lo siapa", "kamu siapa",
+    }
+    if normalized in intro_phrases:
+        result = "Gue JARVIS, asisten desktop lokal lu. Gue bisa buka aplikasi, cari di web, mengetik, menekan shortcut yang diizinkan, menutup aplikasi tertentu, membaca status PC dasar, dan menjalankan perintah desktop yang aman."
+        print("[DIRECT] self_intro -> JARVIS")
+        return result
+
     stop_phrases = {
         "matikan jarvis", "matikan diri", "matikan diri sendiri", "matikan dirimu",
         "matikan diri lu", "matikan diri lo", "matikan diri sendiri lu",
         "matikan diri sendiri lo", "stop jarvis", "shutdown jarvis",
+        "matikan diri sendiri", "matikan jervis", "matikan yervis", "matikan surface",
     }
     if normalized in stop_phrases:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
@@ -588,6 +603,10 @@ def try_direct_command(text: str) -> str | None:
     for prefix in search_prefixes:
         if normalized.startswith(prefix):
             query = normalized[len(prefix):].strip()
+            for suffix in (" di website", " di web", " lewat website", " lewat web", " di google"):
+                if query.endswith(suffix):
+                    query = query[:-len(suffix)].strip()
+                    break
             if query:
                 result = search_web(query)
                 print(f"[DIRECT] search_web -> {result}")
@@ -656,7 +675,12 @@ def main() -> None:
                 "berhenti mendengarkan",
                 "matikan mode suara",
                 "stop jarvis",
+                "stop jervis",
+                "stop yervis",
                 "stop diri sendiri",
+                "jervis matikan diri lo",
+                "yervis matikan diri lo",
+                "surface matikan diri lo",
             }:
                 speak("Mode suara dihentikan, Sir.")
                 break
