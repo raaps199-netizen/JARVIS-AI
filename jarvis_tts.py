@@ -23,6 +23,7 @@ _fallback.setProperty("volume", 1.0)
 
 
 _interrupt_event = threading.Event()
+_elevenlabs_quota_exhausted = False
 
 
 def _clear_console_keys() -> None:
@@ -66,6 +67,9 @@ def _fallback_speak(text: str) -> None:
 
 
 def _elevenlabs_speak(text: str) -> bool:
+    global _elevenlabs_quota_exhausted
+    if _elevenlabs_quota_exhausted:
+        return False
     if not ELEVENLABS_API_KEY:
         return False
     if not ELEVENLABS_API_KEY.startswith("sk_"):
@@ -114,6 +118,9 @@ def _elevenlabs_speak(text: str) -> bool:
         except Exception:
             detail = str(exc)
         print(f"[TTS] ElevenLabs gagal ({exc.code}): {detail[:500]}")
+        if "quota_exceeded" in detail.lower() or "exceeds your quota" in detail.lower():
+            _elevenlabs_quota_exhausted = True
+            print("[TTS] Kuota ElevenLabs habis. JARVIS beralih ke suara Windows untuk sesi ini.")
         return False
     except (URLError, OSError, sd.PortAudioError) as exc:
         print(f"[TTS] ElevenLabs gagal, fallback ke suara lokal: {exc}")
