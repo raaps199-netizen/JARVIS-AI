@@ -31,6 +31,10 @@ STT_MODEL = os.getenv("GEMINI_STT_MODEL", MODEL)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
+MIN_RECORD_SECONDS = 0.35
+SILENCE_SECONDS = 0.65
+START_TIMEOUT_SECONDS = 3.0
+ENERGY_THRESHOLD = 450
 
 
 SYSTEM_PROMPT = """
@@ -257,14 +261,53 @@ def ask_agent(client: genai.Client, user_text: str) -> str:
 
 
 def record_audio(path: Path) -> None:
-    print(f"[MIC] Merekam {RECORD_SECONDS} detik...")
-    recording = sd.rec(
-        int(RECORD_SECONDS * SAMPLE_RATE),
+    print("[MIC] Mendengarkan...")
+    block_size = 1600
+    max_blocks = int(RECORD_SECONDS * SAMPLE_RATE / block_size)
+    min_blocks = max(1, int(MIN_RECORD_SECONDS * SAMPLE_RATE / block_size))
+    silence_blocks = max(1, int(SILENCE_SECONDS * SAMPLE_RATE / block_size))
+    start_timeout_blocks = max(1, int(START_TIMEOUT_SECONDS * SAMPLE_RATE / block_size))
+
+    chunks = []
+    started = False
+    quiet_count = 0
+    wait_count = 0
+
+    with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=1,
         dtype="int16",
-    )
-    sd.wait()
+        blocksize=block_size,
+    ) as stream:
+        for _ in range(max_blocks):
+            data, _ = stream.read(block_size)
+            chunk = data.copy()
+            energy = float(abs(chunk).mean())
+
+            if not started:
+                if energy >= ENERGY_THRESHOLD:
+                    started = True
+                    chunks.append(chunk)
+                    quiet_count = 0
+                    print("[MIC] Suara terdeteksi.")
+                else:
+                    wait_count += 1
+                    if wait_count >= start_timeout_blocks:
+                        break
+                continue
+
+            chunks.append(chunk)
+            if energy < ENERGY_THRESHOLD:
+                quiet_count += 1
+                if len(chunks) >= min_blocks and quiet_count >= silence_blocks:
+                    break
+            else:
+                quiet_count = 0
+
+    if not chunks:
+        raise RuntimeError("Tidak ada suara terdeteksi.")
+
+    recording = __import__("numpy").concatenate(chunks, axis=0)
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
