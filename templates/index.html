@@ -182,8 +182,8 @@ function speakNext(){
   const utterance=new SpeechSynthesisUtterance(text);
   utterance.voice=getJarvisVoice();
   utterance.lang=utterance.voice?.lang || "id-ID";
-  utterance.rate=0.90;
-  utterance.pitch=0.82;
+  utterance.rate=1.12;
+  utterance.pitch=0.86;
   utterance.volume=1;
 
   utterance.onend=()=>{
