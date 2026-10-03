@@ -18,6 +18,12 @@
     .label{color:var(--muted);font-size:12px}.value{margin-top:5px;font-size:14px}
     .side-title{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.14em;margin:22px 0 10px}
     .quick{width:100%;text-align:left;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-bottom:8px;cursor:pointer}.quick:hover{border-color:#38506d}
+    .yt-wrap{display:none;padding:14px 18px;border-bottom:1px solid var(--line);background:#090d13}
+    .yt-wrap.active{display:block}
+    .yt-heading{font-size:13px;font-weight:600;margin:0 0 9px}
+    .yt-subtitle{font-size:11px;color:var(--muted);margin:0 0 10px}
+    .yt-frame{width:100%;aspect-ratio:16/9;border:0;border-radius:12px;background:#000;display:block}
+    .yt-link{display:inline-block;color:#8ccaff;font-size:12px;margin-top:8px}
     main{display:flex;flex-direction:column;min-height:calc(100vh - 64px)}
     header{padding:20px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
     header h2{margin:0;font-size:17px}header span{color:var(--muted);font-size:12px}
@@ -59,6 +65,12 @@
   </aside>
   <main class="panel">
     <header><div><h2>JARVIS Console</h2><span>Realtime-ish voice + streaming AI</span></div><span>STREAM</span></header>
+    <section id="youtubeWrap" class="yt-wrap">
+      <div class="yt-heading" id="youtubeTitle">YouTube Player</div>
+      <div class="yt-subtitle" id="youtubeChannel">Pemutar resmi YouTube</div>
+      <iframe id="youtubePlayer" class="yt-frame" title="YouTube music player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+      <a id="youtubeOpenLink" class="yt-link" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer">Buka di YouTube</a>
+    </section>
     <section id="chat"><div class="msg assistant"><div class="bubble">JARVIS online. Dashboard siap menerima teks atau suara.</div></div></section>
     <div class="composer">
       <form id="form">
@@ -91,6 +103,12 @@ const musicTitle=document.getElementById("musicTitle");
 const musicArtist=document.getElementById("musicArtist");
 const AUDIUS_API="https://discoveryprovider.audius.co/v1";
 const AUDIUS_APP="JARVIS-AI";
+const youtubeWrap=document.getElementById("youtubeWrap");
+const youtubePlayer=document.getElementById("youtubePlayer");
+const youtubeTitle=document.getElementById("youtubeTitle");
+const youtubeChannel=document.getElementById("youtubeChannel");
+const youtubeOpenLink=document.getElementById("youtubeOpenLink");
+let activeMusicSource="audius";
 
 function addMessage(text,role){
   const row=document.createElement("div");
@@ -191,6 +209,59 @@ if("speechSynthesis" in window){
   window.speechSynthesis.onvoiceschanged=()=>{};
 }
 
+function youtubeCommand(func){
+  if(!youtubePlayer.src) return;
+  youtubePlayer.contentWindow?.postMessage(JSON.stringify({
+    event:"command",func,args:[]
+  }),"https://www.youtube.com");
+}
+
+async function youtubeSearch(query){
+  try{
+    const response=await fetch("/api/music/youtube-search",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({query})
+    });
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.error || "YouTube search gagal.");
+
+    const videos=data.items||[];
+    if(!videos.length){
+      addMessage("🎵 Gue nggak nemu video YouTube yang bisa diputar untuk “"+query+"”.","assistant");
+      return false;
+    }
+
+    const wanted=query.toLowerCase().replace(/[^a-z0-9\\s]/g," ").trim();
+    const words=wanted.split(/\\s+/).filter(word=>word.length>1);
+    const ranked=videos.map(video=>{
+      const title=video.title.toLowerCase();
+      let score=0;
+      if(title.includes(wanted)) score+=100;
+      for(const word of words) if(title.includes(word)) score+=10;
+      return {...video,score};
+    }).sort((a,b)=>b.score-a.score);
+
+    const video=ranked[0];
+    activeMusicSource="youtube";
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    youtubeWrap.classList.add("active");
+    youtubeTitle.textContent=video.title;
+    youtubeChannel.textContent=video.channel+" • YouTube resmi";
+    const watchUrl="https://www.youtube.com/watch?v="+encodeURIComponent(video.id);
+    youtubeOpenLink.href=watchUrl;
+    youtubePlayer.src="https://www.youtube.com/embed/"+encodeURIComponent(video.id)
+      +"?autoplay=1&playsinline=1&controls=1&enablejsapi=1&origin="+encodeURIComponent(location.origin);
+    addMessage("▶️ Gue pilih hasil YouTube: "+video.title+" — "+video.channel+". Kalau autoplay diblokir, tekan ▶ di pemutar.","assistant");
+    return true;
+  }catch(error){
+    addMessage("🎵 YouTube error: "+error.message,"assistant");
+    return false;
+  }
+}
+
 async function musicSearch(query){
   const cleanQuery=query.trim();
   if(!cleanQuery) return false;
@@ -227,11 +298,13 @@ async function musicSearch(query){
     }).sort((a,b)=>b.score-a.score);
 
     if(!ranked.length || ranked[0].score===0){
-      addMessage("🎵 Gue nggak nemu kecocokan judul yang cukup jelas untuk “"+cleanQuery+"” di Audius, jadi nggak gue putar lagu random. Katalog Audius memang terbatas.","assistant");
       return false;
     }
 
     const track=ranked[0].track;
+    activeMusicSource="audius";
+    youtubePlayer.src="";
+    youtubeWrap.classList.remove("active");
     const streamUrl=AUDIUS_API+"/tracks/"+encodeURIComponent(track.id)+"/stream?app_name="+encodeURIComponent(AUDIUS_APP);
 
     audio.src=streamUrl;
@@ -248,14 +321,29 @@ async function musicSearch(query){
     }
     return true;
   }catch(error){
-    addMessage("🎵 Music error: "+error.message,"assistant");
+    console.warn("Audius search failed:",error);
     return false;
   }
 }
 
-function musicPause(){ audio.pause(); }
-function musicResume(){ audio.play().catch(()=>{}); }
-function musicStop(){ audio.pause(); audio.currentTime=0; }
+function musicPause(){
+  if(activeMusicSource==="youtube") youtubeCommand("pauseVideo");
+  else audio.pause();
+}
+function musicResume(){
+  if(activeMusicSource==="youtube") youtubeCommand("playVideo");
+  else audio.play().catch(()=>{});
+}
+function musicStop(){
+  if(activeMusicSource==="youtube"){
+    youtubeCommand("stopVideo");
+    youtubePlayer.src="";
+    youtubeWrap.classList.remove("active");
+  }else{
+    audio.pause();
+    audio.currentTime=0;
+  }
+}
 
 async function tryMusicCommand(message){
   const lower=message.trim().toLowerCase();
@@ -285,7 +373,11 @@ async function tryMusicCommand(message){
   if(!query) return false;
 
   addMessage("🎵 Mencari: "+query,"user");
-  await musicSearch(query);
+  const foundOnAudius=await musicSearch(query);
+  if(!foundOnAudius){
+    addMessage("Audius nggak punya hasil yang cocok. Gue lanjut cari di YouTube...","assistant");
+    await youtubeSearch(query);
+  }
   return true;
 }
 
@@ -414,7 +506,8 @@ document.querySelectorAll(".quick").forEach(button=>{
 document.getElementById("musicTest").addEventListener("click",async()=>{
   stopSpeaking();
   addMessage("🎵 Test musik: lofi hip hop","user");
-  await musicSearch("lofi hip hop");
+  const found=await musicSearch("lofi hip hop");
+  if(!found) await youtubeSearch("lofi hip hop");
 });
 
 document.getElementById("musicPause").addEventListener("click",musicPause);
