@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 import pyttsx3
 import sounddevice as sd
@@ -20,6 +21,30 @@ _fallback = pyttsx3.init()
 _fallback.setProperty("rate", 172)
 _fallback.setProperty("volume", 1.0)
 
+
+_interrupt_event = threading.Event()
+
+
+def _clear_console_keys() -> None:
+    if os.name != "nt":
+        return
+    import msvcrt
+    while msvcrt.kbhit():
+        msvcrt.getwch()
+
+
+def _speech_interrupted() -> bool:
+    """ESC in the JARVIS console interrupts the current spoken response."""
+    if os.name != "nt":
+        return _interrupt_event.is_set()
+    import msvcrt
+    if msvcrt.kbhit():
+        key = msvcrt.getwch()
+        if key == "\x1b":
+            _interrupt_event.set()
+            return True
+    return _interrupt_event.is_set()
+
 for _voice in _fallback.getProperty("voices"):
     _meta = f"{getattr(_voice, 'name', '')} {getattr(_voice, 'id', '')} {getattr(_voice, 'languages', '')}".lower()
     if any(token in _meta for token in ("indonesia", "indonesian", "id-id", "id_id")):
@@ -28,8 +53,16 @@ for _voice in _fallback.getProperty("voices"):
 
 
 def _fallback_speak(text: str) -> None:
-    _fallback.say(text)
-    _fallback.runAndWait()
+    worker = threading.Thread(target=lambda: (_fallback.say(text), _fallback.runAndWait()), daemon=True)
+    worker.start()
+    while worker.is_alive():
+        if _speech_interrupted():
+            try:
+                _fallback.stop()
+            except Exception:
+                pass
+            break
+        worker.join(0.05)
 
 
 def _elevenlabs_speak(text: str) -> bool:
@@ -67,7 +100,13 @@ def _elevenlabs_speak(text: str) -> bool:
             pcm = response.read()
 
         with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as stream:
-            stream.write(pcm)
+            chunk_size = 24000 * 2 // 4  # ~250 ms of mono int16 audio
+            for start in range(0, len(pcm), chunk_size):
+                if _speech_interrupted():
+                    stream.stop()
+                    print("[TTS] Speech interrupted by ESC.")
+                    return True
+                stream.write(pcm[start:start + chunk_size])
         return True
     except HTTPError as exc:
         try:
@@ -86,6 +125,8 @@ def speak(text: str) -> None:
     if not text:
         return
 
+    _interrupt_event.clear()
+    _clear_console_keys()
     print(f"JARVIS: {text}")
     if not _elevenlabs_speak(text):
         _fallback_speak(text)
