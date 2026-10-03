@@ -207,6 +207,43 @@ def press_key(key: str) -> str:
         return f"Gagal menekan {key}: {exc}"
 
 
+def type_text(text: str) -> str:
+    text = str(text)
+    if not text:
+        return "Teks kosong."
+    try:
+        pyperclip.copy(text)
+        time.sleep(0.1)
+        pyautogui.hotkey("ctrl", "v")
+        return "Teks berhasil diketik ke jendela aktif."
+    except Exception as exc:
+        return f"Gagal mengetik teks: {exc}"
+
+
+def press_key(key: str) -> str:
+    aliases = {
+        "enter": "enter", "esc": "esc", "escape": "esc", "tab": "tab",
+        "backspace": "backspace", "delete": "delete", "home": "home", "end": "end",
+        "up": "up", "down": "down", "left": "left", "right": "right",
+        "ctrl+s": "ctrl+s", "ctrl+n": "ctrl+n", "ctrl+a": "ctrl+a",
+        "ctrl+c": "ctrl+c", "ctrl+v": "ctrl+v", "ctrl+x": "ctrl+x",
+        "ctrl+z": "ctrl+z", "alt+f4": "alt+f4",
+    }
+    normalized = str(key).lower().replace(" ", "")
+    mapped = aliases.get(normalized)
+    if not mapped:
+        return f"Tombol atau shortcut '{key}' tidak diizinkan."
+    try:
+        if "+" in mapped:
+            pyautogui.hotkey(*mapped.split("+"))
+        else:
+            pyautogui.press(mapped)
+        return f"Berhasil menekan {key}."
+    except Exception as exc:
+        return f"Gagal menekan {key}: {exc}"
+
+
+
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
     if name == "open_app":
         return open_app(str(arguments["name"]))
@@ -382,6 +419,15 @@ def try_direct_command(text: str) -> str | None:
                     result = f"{open_result} {search_result}"
                     print(f"[DIRECT] chrome search -> {result}")
                     return result
+
+    stop_phrases = {
+        "matikan jarvis", "matikan diri", "matikan diri sendiri", "matikan dirimu",
+        "matikan diri lu", "matikan diri lo", "matikan diri sendiri lu",
+        "matikan diri sendiri lo", "stop jarvis", "shutdown jarvis",
+    }
+    if normalized in stop_phrases:
+        print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
+        return "__JARVIS_STOP__"
 
     stop_phrases = {
         "matikan jarvis", "matikan diri", "matikan diri sendiri", "matikan dirimu",
