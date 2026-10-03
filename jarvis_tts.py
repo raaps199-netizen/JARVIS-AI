@@ -66,7 +66,7 @@ def _elevenlabs_speak(text: str) -> bool:
         with urlopen(request, timeout=30) as response:
             pcm = response.read()
 
-        with sd.RawOutputStream(samplerate=44100, channels=1, dtype="int16") as stream:
+        with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as stream:
             stream.write(pcm)
         return True
     except HTTPError as exc:
