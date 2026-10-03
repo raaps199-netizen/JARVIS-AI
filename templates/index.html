@@ -573,6 +573,11 @@ async function processVoiceTurn(){
   voiceRequestBusy=true;
   voiceRestartPending=true;
   await sendMessage(message);
+  // Jangan buka mikrofon saat JARVIS masih bicara, supaya suaranya sendiri
+  // tidak tertangkap lagi dan membuat lingkaran percakapan yang absurd.
+  while(voiceMode && !voiceMuted && (isSpeaking || speechQueue.length || speechBuffer.trim())){
+    await new Promise(resolve=>setTimeout(resolve,180));
+  }
   voiceRequestBusy=false;
   if(voiceMode){
     hint.textContent="Silakan bicara. JARVIS mendengarkan...";
