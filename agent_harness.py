@@ -15,6 +15,7 @@ import wave
 import webbrowser
 import pyautogui
 import pyperclip
+from pywinauto import Desktop
 from urllib.parse import quote_plus
 from pathlib import Path
 from typing import Any
@@ -43,15 +44,20 @@ ENERGY_THRESHOLD = 120
 SYSTEM_PROMPT = """
 You are JARVIS, a local Windows desktop AI assistant.
 
-Speak natural casual Indonesian by default. Use gue/lu naturally and address the
-user as "Sir" occasionally, not every sentence.
+SELALU jawab dalam bahasa Indonesia. Jangan beralih ke bahasa Inggris hanya karena
+STT menangkap kata Inggris. Gunakan bahasa Inggris hanya jika user secara eksplisit
+meminta output dalam bahasa Inggris. Use gue/lu naturally and address the user as
+"Sir" occasionally, not every sentence.
 
 You have access to a small set of local PC tools. Decide yourself when a tool is
 needed. Do not claim an action happened unless its tool result says it succeeded.
 After a tool runs, briefly explain the result to the user. Use only the exact tool names provided in the tool list. Never invent, modify, append channel labels to, or otherwise alter a tool name.
 
 Available capabilities include opening approved applications, websites, folders,
-and reading basic computer status.
+typing text, pressing safe keyboard shortcuts, interacting with visible Windows UI
+elements by their displayed text, scrolling, waiting for UI changes, and reading
+basic non-sensitive UI status. When the user asks to operate a desktop application,
+actually perform the requested UI steps instead of merely explaining them.
 
 Do not invent access to files or system state. Do not execute destructive,
 credential-stealing, surveillance, financial, or otherwise dangerous actions.
@@ -93,6 +99,11 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"open_site","description":"Open an approved website.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["youtube","google","github","chatgpt"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"open_folder","description":"Open a common user folder.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["home","desktop","documents","downloads"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"type_text","description":"Type exact text into the currently focused desktop application when explicitly requested.","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
+
+    {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"ui_inspect","description":"Inspect visible non-sensitive Windows UI controls so JARVIS can understand what is currently on screen before clicking. Do not use it to retrieve passwords or sensitive fields.","parameters":{"type":"object","properties":{"window_title":{"type":"string"}}}}},
+    {"type":"function","function":{"name":"scroll_mouse","description":"Scroll the currently focused desktop UI.","parameters":{"type":"object","properties":{"clicks":{"type":"integer"}},"required":["clicks"]}}},
+    {"type":"function","function":{"name":"wait_seconds","description":"Wait briefly for a desktop application or dialog to finish opening.","parameters":{"type":"object","properties":{"seconds":{"type":"number"}},"required":["seconds"]}}},
     {"type":"function","function":{"name":"press_key","description":"Press an allowlisted keyboard key or shortcut.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}},
     {"type":"function","function":{"name":"close_active_window","description":"Close the currently focused Windows application/window using Alt+F4.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"close_app","description":"Close one specific approved application by its process/window, without closing whichever unrelated window happens to be focused. Use this whenever the user names a specific application to close.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["notepad","calculator","chrome","vscode","word","explorer","task manager"]}},"required":["name"]}}},
@@ -192,8 +203,11 @@ def press_key(key: str) -> str:
         "ctrl+v": "ctrl+v",
         "ctrl+x": "ctrl+x",
         "ctrl+z": "ctrl+z",
-        "ctrl+h": "ctrl+h",
-        "alt+f4": "alt+f4",
+        "ctrl+h": "ctrl+h", "ctrl+f": "ctrl+f", "ctrl+p": "ctrl+p",
+        "ctrl+shift+s": "ctrl+shift+s", "ctrl+shift+n": "ctrl+shift+n",
+        "ctrl+shift+z": "ctrl+shift+z", "ctrl+enter": "ctrl+enter",
+        "shift+enter": "shift+enter", "f2": "f2", "f4": "f4",
+        "f5": "f5", "f11": "f11", "alt+f4": "alt+f4",
     }
     normalized = str(key).lower().replace(" ", "")
     mapped = aliases.get(normalized)
@@ -246,6 +260,71 @@ def press_key(key: str) -> str:
 
 
 
+
+def _ui_windows(window_title: str | None = None):
+    desktop=Desktop(backend="uia"); windows=[]
+    for win in desktop.windows(visible_only=True):
+        try:
+            title=(win.window_text() or "").strip()
+            if title and (not window_title or window_title.lower() in title.lower()): windows.append(win)
+        except Exception: pass
+    return windows
+
+def ui_inspect(window_title: str = "") -> str:
+    try:
+        windows=_ui_windows(window_title.strip() or None)
+        if not windows: return "Tidak menemukan jendela UI yang cocok."
+        lines=[]
+        for win in windows[:6]:
+            lines.append(f"WINDOW: {(win.window_text() or '').strip()}")
+            count=0
+            for ctrl in win.descendants():
+                if count>=60: break
+                try:
+                    if getattr(ctrl.element_info,"is_password",False): continue
+                    text=(ctrl.window_text() or "").strip().replace("\n"," ")
+                    ctype=str(ctrl.element_info.control_type or "")
+                    if text and ctype.lower() in {"text","button","edit","tabitem","menuitem","listitem","combobox","checkbox","radiobutton","hyperlink"}:
+                        lines.append(f"  {ctype}: {text[:180]}"); count+=1
+                except Exception: pass
+        return "\n".join(lines)[:12000] if lines else "Tidak ada kontrol UI yang terbaca."
+    except Exception as exc: return f"Gagal membaca UI Windows: {exc}"
+
+def ui_click(text: str, window_title: str = "") -> str:
+    target=str(text).strip()
+    if not target: return "Teks target UI kosong."
+    try:
+        exact=[]; partial=[]
+        for win in _ui_windows(window_title.strip() or None):
+            for ctrl in win.descendants():
+                try:
+                    if getattr(ctrl.element_info,"is_password",False): continue
+                    label=(ctrl.window_text() or "").strip()
+                    if not label: continue
+                    if label.casefold()==target.casefold(): exact.append(ctrl)
+                    elif target.casefold() in label.casefold(): partial.append(ctrl)
+                except Exception: pass
+        candidates=exact or partial
+        if not candidates: return f"Elemen UI '{target}' tidak ditemukan."
+        ctrl=candidates[0]
+        try: ctrl.scroll_into_view()
+        except Exception: pass
+        ctrl.click_input()
+        return f"Berhasil klik '{(ctrl.window_text() or target).strip()}'."
+    except Exception as exc: return f"Gagal klik UI '{target}': {exc}"
+
+def scroll_mouse(clicks:int) -> str:
+    try:
+        value=max(-20,min(20,int(clicks))); pyautogui.scroll(value)
+        return f"Berhasil scroll {value} klik."
+    except Exception as exc: return f"Gagal scroll: {exc}"
+
+def wait_seconds(seconds:float) -> str:
+    try:
+        value=max(0.1,min(5.0,float(seconds))); time.sleep(value)
+        return f"Menunggu {value:.1f} detik selesai."
+    except Exception as exc: return f"Gagal menunggu: {exc}"
+
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
     # Some model/tool adapters can occasionally append an internal channel marker.
     # Strip it before dispatching, but never execute arbitrary tool names.
@@ -261,6 +340,10 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return open_folder(str(arguments["name"]))
     if name == "type_text":
         return type_text(str(arguments["text"]))
+    if name == "ui_click": return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
+    if name == "ui_inspect": return ui_inspect(str(arguments.get("window_title","")))
+    if name == "scroll_mouse": return scroll_mouse(int(arguments["clicks"]))
+    if name == "wait_seconds": return wait_seconds(float(arguments["seconds"]))
     if name == "press_key":
         return press_key(str(arguments["key"]))
     if name == "pc_status":
@@ -617,6 +700,18 @@ def try_direct_command(text: str) -> str | None:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
         return "__JARVIS_STOP__"
 
+    for click_prefix in ("klik ", "click "):
+        if normalized.startswith(click_prefix):
+            target=normalized[len(click_prefix):].strip()
+            if target:
+                result=ui_click(target); print(f"[DIRECT] ui_click -> {result}"); return result
+    if normalized in {"lihat layar","baca layar","cek layar","lihat jendela"}:
+        result=ui_inspect(); print("[DIRECT] ui_inspect -> layar dibaca"); return result
+    if normalized.startswith("scroll "):
+        direction=normalized[7:].strip()
+        amount=5 if direction in {"bawah","down"} else -5 if direction in {"atas","up"} else 0
+        if amount:
+            result=scroll_mouse(amount); print(f"[DIRECT] scroll_mouse -> {result}"); return result
     typing_prefixes = ("ketik ", "tulis ", "ketikkan ")
     original_clean = " ".join(text.strip().split())
     original_lower = original_clean.lower()
