@@ -65,6 +65,7 @@ APPS = {
     "calculator": ["calc.exe"],
     "chrome": ["cmd", "/c", "start", "", "chrome"],
     "vscode": ["cmd", "/c", "start", "", "code"],
+    "word": ["cmd", "/c", "start", "", "winword"],
     "explorer": ["explorer.exe"],
     "task manager": ["taskmgr.exe"],
     "settings": ["cmd", "/c", "start", "", "ms-settings:"],
@@ -94,7 +95,7 @@ TOOL_DECLARATIONS = [
                 "name": {
                     "type": "string",
                     "enum": [
-                        "notepad", "calculator", "chrome", "vscode",
+                        "notepad", "calculator", "chrome", "vscode", "word",
                         "explorer", "task manager", "settings",
                     ],
                 }
@@ -231,6 +232,9 @@ def _gemini_generate(client: genai.Client, *, model: str, contents: Any, config:
         except Exception as exc:
             last_error = exc
             message = str(exc).upper()
+            # Daily free-tier quota errors do not recover by retrying a few seconds later.
+            if "429" in message and ("QUOTA" in message or "RESOURCE_EXHAUSTED" in message or "RETRYDELAY" in message):
+                raise
             if "503" not in message and "UNAVAILABLE" not in message and "429" not in message:
                 raise
             wait = 2 * (attempt + 1)
@@ -361,6 +365,10 @@ def try_direct_command(text: str) -> str | None:
         "task manager": "task manager",
         "vscode": "vscode",
         "vs code": "vscode",
+        "word": "word",
+        "microsoft word": "word",
+        "note": "notepad",
+        "catatan": "notepad",
         "pengaturan": "settings",
         "settings": "settings",
     }
@@ -370,6 +378,21 @@ def try_direct_command(text: str) -> str | None:
         result = open_app(app)
         print(f"[DIRECT] open_app -> {result}")
         return result
+
+    # Handle common "buka X lalu/terus/dan cari Y" phrasing without Gemini.
+    combined_search_markers = (" lalu cari ", " terus cari ", " dan cari ")
+    if normalized.startswith("buka ") and any(marker in normalized for marker in combined_search_markers):
+        for marker in combined_search_markers:
+            if marker in normalized:
+                app_part, query = normalized[5:].split(marker, 1)
+                app = app_aliases.get(app_part.strip())
+                query = query.strip()
+                if app == "chrome" and query:
+                    open_result = open_app("chrome")
+                    search_result = search_web(query)
+                    result = f"{open_result} {search_result}"
+                    print(f"[DIRECT] chrome search -> {result}")
+                    return result
 
     search_prefixes = (
         "cari tentang ",
