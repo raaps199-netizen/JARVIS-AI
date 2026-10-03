@@ -1736,7 +1736,8 @@ def main() -> None:
         if TEXT_MODE
         else (lambda description: confirm_action_via_voice(client, description))
     )
-    speak("System online, Sir. I am ready to listen.")
+    if not TEXT_MODE:
+        speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
 
     if TEXT_MODE:
