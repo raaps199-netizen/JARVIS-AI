@@ -673,13 +673,14 @@ def main() -> None:
             print(f"Sir: {heard}")
             normalized = heard.lower().strip()
 
-            if normalized in {
+            shutdown_phrases = {
                 "shutdown jarvis",
                 "matikan jarvis",
                 "matikan diri",
                 "matikan diri sendiri",
                 "matikan dirimu",
                 "matikan diri lu",
+                "matikan diri lo",
                 "berhenti mendengarkan",
                 "matikan mode suara",
                 "stop jarvis",
@@ -689,15 +690,19 @@ def main() -> None:
                 "jervis matikan diri lo",
                 "yervis matikan diri lo",
                 "surface matikan diri lo",
-            }:
-                speak("Mode suara dihentikan, Sir.")
-                break
+            }
+
+            if normalized in shutdown_phrases:
+                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
+                speak("Baik, Sir. Saya mematikan sistem JARVIS.")
+                return
 
             direct_reply = try_direct_command(heard)
             if direct_reply is not None:
                 if direct_reply == "__JARVIS_STOP__":
+                    print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
                     speak("Baik, Sir. Saya mematikan sistem JARVIS.")
-                    break
+                    return
                 speak(direct_reply)
                 continue
 
