@@ -54,12 +54,26 @@ for _voice in _fallback.getProperty("voices"):
 
 
 def _fallback_speak(text: str) -> None:
-    worker = threading.Thread(target=lambda: (_fallback.say(text), _fallback.runAndWait()), daemon=True)
+    # Fresh engine per utterance avoids pyttsx3's "run loop already started"
+    # state after an interrupted Windows TTS run.
+    engine = pyttsx3.init()
+    engine.setProperty("rate", 172)
+    engine.setProperty("volume", 1.0)
+    for voice in engine.getProperty("voices"):
+        meta = f"{getattr(voice, 'name', '')} {getattr(voice, 'id', '')} {getattr(voice, 'languages', '')}".lower()
+        if any(token in meta for token in ("indonesia", "indonesian", "id-id", "id_id")):
+            engine.setProperty("voice", voice.id)
+            break
+
+    worker = threading.Thread(
+        target=lambda: (engine.say(text), engine.runAndWait()),
+        daemon=True,
+    )
     worker.start()
     while worker.is_alive():
         if _speech_interrupted():
             try:
-                _fallback.stop()
+                engine.stop()
             except Exception:
                 pass
             break
