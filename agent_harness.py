@@ -5,6 +5,7 @@ The PC tool set is intentionally allowlisted instead of exposing arbitrary shell
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import platform
@@ -14,6 +15,7 @@ import time
 import wave
 import webbrowser
 import pyautogui
+import cv2
 import pyperclip
 from pywinauto import Desktop
 from urllib.parse import quote_plus
@@ -31,6 +33,7 @@ load_dotenv()
 
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
+VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
@@ -102,6 +105,9 @@ TOOL_DECLARATIONS = [
 
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"ui_inspect","description":"Inspect visible non-sensitive Windows UI controls so JARVIS can understand what is currently on screen before clicking. Do not use it to retrieve passwords or sensitive fields.","parameters":{"type":"object","properties":{"window_title":{"type":"string"}}}}},
+
+    {"type":"function","function":{"name":"see_screen","description":"Capture the current Windows screen and analyze visible UI/content with a vision model. Use this when the user asks what is on screen or when visual understanding is needed before an action.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
+    {"type":"function","function":{"name":"see_webcam","description":"Capture one frame from the default webcam and analyze what is visibly present. Use only when the user explicitly asks JARVIS to look through the webcam/camera.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
     {"type":"function","function":{"name":"scroll_mouse","description":"Scroll the currently focused desktop UI.","parameters":{"type":"object","properties":{"clicks":{"type":"integer"}},"required":["clicks"]}}},
     {"type":"function","function":{"name":"wait_seconds","description":"Wait briefly for a desktop application or dialog to finish opening.","parameters":{"type":"object","properties":{"seconds":{"type":"number"}},"required":["seconds"]}}},
     {"type":"function","function":{"name":"press_key","description":"Press an allowlisted keyboard key or shortcut.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}},
@@ -325,6 +331,55 @@ def wait_seconds(seconds:float) -> str:
         return f"Menunggu {value:.1f} detik selesai."
     except Exception as exc: return f"Gagal menunggu: {exc}"
 
+
+def _vision_answer(client: Groq, image_bytes: bytes, question: str, source: str) -> str:
+    encoded=base64.b64encode(image_bytes).decode("utf-8")
+    response=client.chat.completions.create(
+        model=VISION_MODEL,
+        messages=[{
+            "role":"user",
+            "content":[
+                {"type":"text","text":f"JARVIS is viewing a {source}. Answer in concise Indonesian. Describe only what is visibly supported by the image. User asks: {question}"},
+                {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{encoded}"}}
+            ]
+        }],
+        temperature=0.2,
+        max_completion_tokens=700,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+def see_screen(client: Groq, question: str) -> str:
+    try:
+        shot=pyautogui.screenshot()
+        from io import BytesIO
+        buf=BytesIO()
+        shot.convert("RGB").save(buf, format="JPEG", quality=80)
+        return _vision_answer(client, buf.getvalue(), question, "screen Windows")
+    except Exception as exc:
+        return f"Gagal melihat layar: {exc}"
+
+
+def see_webcam(client: Groq, question: str) -> str:
+    cap=None
+    try:
+        cap=cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            return "Webcam tidak bisa dibuka."
+        ok, frame=cap.read()
+        if not ok:
+            return "Webcam terbuka tetapi frame tidak berhasil diambil."
+        ok, encoded=cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY),80])
+        if not ok:
+            return "Frame webcam gagal dikodekan."
+        return _vision_answer(client, encoded.tobytes(), question, "webcam")
+    except Exception as exc:
+        return f"Gagal melihat webcam: {exc}"
+    finally:
+        if cap is not None:
+            cap.release()
+
+
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
     # Some model/tool adapters can occasionally append an internal channel marker.
     # Strip it before dispatching, but never execute arbitrary tool names.
@@ -342,6 +397,8 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return type_text(str(arguments["text"]))
     if name == "ui_click": return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
     if name == "ui_inspect": return ui_inspect(str(arguments.get("window_title","")))
+    if name == "see_screen": return see_screen(client, str(arguments["question"]))
+    if name == "see_webcam": return see_webcam(client, str(arguments["question"]))
     if name == "scroll_mouse": return scroll_mouse(int(arguments["clicks"]))
     if name == "wait_seconds": return wait_seconds(float(arguments["seconds"]))
     if name == "press_key":
