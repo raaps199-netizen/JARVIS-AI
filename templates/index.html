@@ -378,31 +378,49 @@ function musicStop(){
   }
 }
 
+function cleanVoiceTranscript(text){
+  // Browser kadang mengulang token saat memperbarui hasil pengenalan.
+  // Hapus duplikasi kata berurutan tanpa mengubah kata-kata lainnya.
+  return text
+    .replace(/\b([\p{L}\p{N}]+)([\s,]+)\1\b/giu, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function tryMusicCommand(message){
   const lower=message.trim().toLowerCase();
 
-  if(/^(pause|jeda|berhenti sebentar)$/.test(lower)){
+  if(/^(?:jarvis[, ]*)?(pause|jeda|berhenti sebentar)$/.test(lower)){
     musicPause();
     addMessage("⏸️ Musik dipause.","assistant");
     return true;
   }
 
-  if(/^(lanjut|resume|continue|terusin)$/.test(lower)){
+  if(/^(?:jarvis[, ]*)?(lanjut|resume|continue|terusin)$/.test(lower)){
     musicResume();
     addMessage("▶️ Musik dilanjutkan.","assistant");
     return true;
   }
 
-  if(/^(stop|berhenti|matikan musik)$/.test(lower)){
+  if(/^(?:jarvis[, ]*)?(stop|berhenti|matikan musik)$/.test(lower)){
     musicStop();
     addMessage("⏹️ Musik dihentikan.","assistant");
     return true;
   }
 
-  const match=message.match(/^(?:tolong\s+)?(?:putar(?:in)?|mainkan|play|nyalain|nyalakan|cari(?:kan)?(?: musik)?|putar lagu)\s+(.+)$/i);
+  // Terima frasa pembuka percakapan dan kata pengisi yang umum pada perintah suara.
+  const normalized=message
+    .replace(/^\s*(?:hai\s+)?jarvis[,:.!]?\s*/i, "")
+    .replace(/\b(?:dong|tolong|coba|deh|ya|please)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const match=normalized.match(/^(?:aku mau\s+|gue mau\s+|tolong\s+)?(?:putar(?:in)?|setel(?:kan)?|mainkan|play|nyalain|nyalakan|cari(?:kan)?(?: musik)?|putar lagu)\s+(.+)$/i);
   if(!match) return false;
 
-  let query=match[1].trim().replace(/^lagu\s+/i,"");
+  let query=match[1].trim()
+    .replace(/^(?:lagu|musik)\s+/i,"")
+    .replace(/\s+/g," ");
   if(!query) return false;
 
   addMessage("🎵 Mencari: "+query,"user");
@@ -567,7 +585,7 @@ function stopVoiceRecognition(){
 }
 
 async function processVoiceTurn(){
-  const message=voiceTranscript.trim();
+  const message=cleanVoiceTranscript(voiceTranscript);
   voiceTranscript="";
   input.value="";
   if(!message || voiceRequestBusy || !voiceMode) return;
