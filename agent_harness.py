@@ -29,12 +29,14 @@ from dotenv import load_dotenv
 from groq import Groq
 
 from jarvis_tts import speak
+from hermes_bridge import ask_hermes, hermes_available
 
 load_dotenv()
 
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
+HERMES_AGENT_ENABLED = os.getenv("HERMES_AGENT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
@@ -715,6 +717,12 @@ def stop_jarvis() -> str:
 
 
 def ask_agent(client: Groq, user_text: str) -> str:
+    if HERMES_AGENT_ENABLED and hermes_available():
+        hermes_reply = ask_hermes(user_text)
+        if hermes_reply:
+            print(f"[HERMES] {hermes_reply}")
+            return hermes_reply
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_text},
