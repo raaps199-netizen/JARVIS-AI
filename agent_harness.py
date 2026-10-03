@@ -67,6 +67,11 @@ type text, press keyboard shortcuts, read ordinary user files, create/edit/renam
 move/delete files, and operate Microsoft Word deeply. You may chain many tool calls
 to complete a multi-step task.
 
+When the user refers to a visual or positional target such as "the second video",
+"the third card", "the button on the top right", or "the play icon", use the
+visual_click tool so the current screen is analyzed before the click. Do not rely
+on ui_click for repeated visual items that do not have unique accessible text.
+
 WORD HAS DEEP CONTROL: When Microsoft Word is active and the user asks to write,
 format, edit, select, style, align, change font/size, insert tables, read the
 current document, or save the document, use the Word tools below instead of
