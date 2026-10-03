@@ -20,6 +20,12 @@ _fallback = pyttsx3.init()
 _fallback.setProperty("rate", 172)
 _fallback.setProperty("volume", 1.0)
 
+for _voice in _fallback.getProperty("voices"):
+    _meta = f"{getattr(_voice, 'name', '')} {getattr(_voice, 'id', '')} {getattr(_voice, 'languages', '')}".lower()
+    if any(token in _meta for token in ("indonesia", "indonesian", "id-id", "id_id")):
+        _fallback.setProperty("voice", _voice.id)
+        break
+
 
 def _fallback_speak(text: str) -> None:
     _fallback.say(text)
@@ -28,6 +34,9 @@ def _fallback_speak(text: str) -> None:
 
 def _elevenlabs_speak(text: str) -> bool:
     if not ELEVENLABS_API_KEY:
+        return False
+    if not ELEVENLABS_API_KEY.startswith("sk_"):
+        print("[TTS] ELEVENLABS_API_KEY bukan secret key. Secret ElevenLabs harus diawali sk_.")
         return False
 
     payload = json.dumps({
