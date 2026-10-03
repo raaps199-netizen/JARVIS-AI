@@ -94,6 +94,7 @@ const hint=document.getElementById("hint");
 
 let recognition=null;
 let isListening=false;
+let isStartingRecognition=false;
 let finalTranscript="";
 let speechQueue=[];
 let isSpeaking=false;
@@ -523,6 +524,7 @@ if(SpeechRecognition){
   recognition.interimResults=true;
 
   recognition.onstart=()=>{
+    isStartingRecognition=false;
     stopSpeaking();
     isListening=true;
     finalTranscript="";
@@ -548,6 +550,7 @@ if(SpeechRecognition){
   };
 
   recognition.onerror=event=>{
+    isStartingRecognition=false;
     isListening=false;
     mic.classList.remove("recording");
     mic.textContent="🎙️";
@@ -561,6 +564,7 @@ if(SpeechRecognition){
   };
 
   recognition.onend=()=>{
+    isStartingRecognition=false;
     if(!isListening) return;
 
     isListening=false;
@@ -581,16 +585,25 @@ if(SpeechRecognition){
   mic.addEventListener("click",()=>{
     if(isListening){
       isListening=false;
-      recognition.stop();
+      try{ recognition.stop(); }catch(error){}
       return;
     }
+
+    // Browser dapat masih menganggap recognition aktif sesaat setelah stop/onend.
+    if(isStartingRecognition) return;
 
     try{
       stopSpeaking();
       input.value="";
       finalTranscript="";
+      isStartingRecognition=true;
       recognition.start();
     }catch(error){
+      isStartingRecognition=false;
+      if(error.name==="InvalidStateError"){
+        hint.textContent="Mikrofon masih memproses sesi sebelumnya. Tunggu sebentar lalu coba lagi.";
+        return;
+      }
       hint.textContent="Gagal memulai voice input.";
       addMessage("Voice error: "+error.message,"assistant");
     }
