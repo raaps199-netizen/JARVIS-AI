@@ -1283,9 +1283,9 @@ def ask_agent(client: Any, user_text: str) -> str:
                     if not approval:
                         result = "The user denied this consequential UI action."
                     else:
-                        result = run_tool(tool_name, arguments)
+                        result = run_tool(tool_name, arguments, client)
                 else:
-                    result = run_tool(tool_name, arguments)
+                    result = run_tool(tool_name, arguments, client)
 
                 if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):
                     description = result.split(":", 1)[1].strip()
@@ -1394,7 +1394,7 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
     normalized = " ".join(text.lower().strip().split())
     # Whisper/Groq can mishear "Jarvis" as "Jervis", "Yervis", or "Surface".
     # Treat these common wake-name variants as the same command prefix.
-    prefixes = ("tolong ", "jarvis ", "jervis ", "yervis ", "surface ", "service ", "sir ", "bisa ")
+    prefixes = ("tolong ", "jarvis ", "jervis ", "yervis ", "surface ", "service ", "sir ", "bisa ", "oke ", "okay ", "ok ")
 
     for prefix in prefixes:
         if normalized.startswith(prefix):
@@ -1480,20 +1480,37 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
             print(f"[DIRECT] chrome search -> {result}")
             return result
 
-    # Handle common "buka X lalu/terus/dan cari Y" phrasing without Gemini.
-    combined_search_markers = (" lalu cari ", " terus cari ", " dan cari ")
-    if normalized.startswith("buka ") and any(marker in normalized for marker in combined_search_markers):
-        for marker in combined_search_markers:
-            if marker in normalized:
-                app_part, query = normalized[5:].split(marker, 1)
-                app = app_aliases.get(app_part.strip())
-                query = query.strip()
-                if app == "chrome" and query:
-                    open_result = open_app("chrome")
+    # Handle common browser sequences locally so simple multi-step requests
+    # do not spend multiple Qwen turns.
+    page_search_markers = (
+        " lalu cari ", " terus cari ", " dan cari ",
+        " then search ", " and search ",
+    )
+    for marker in page_search_markers:
+        if normalized.startswith("buka ") and marker in normalized:
+            app_part, query = normalized[5:].split(marker, 1)
+            app = app_aliases.get(app_part.strip())
+            query = query.strip()
+            if app == "chrome" and query:
+                wants_page_search = (
+                    query.endswith(" di search bar")
+                    or query.endswith(" di kolom pencarian")
+                    or query.endswith(" in the search bar")
+                    or query.endswith(" in search bar")
+                )
+                for suffix in (" di search bar", " di kolom pencarian", " in the search bar", " in search bar"):
+                    if query.endswith(suffix):
+                        query = query[:-len(suffix)].strip()
+                        break
+                open_result = open_app("chrome")
+                time.sleep(UI_DELAY_SECONDS)
+                if wants_page_search and client is not None:
+                    search_result = browser_search(client, query)
+                else:
                     search_result = search_web(query)
-                    result = f"{open_result} {search_result}"
-                    print(f"[DIRECT] chrome search -> {result}")
-                    return result
+                result = f"{open_result} {search_result}"
+                print(f"[DIRECT] browser sequence -> {result}")
+                return result
 
     intro_phrases = {
         "ceritain tentang diri lu", "ceritakan tentang diri lu",
@@ -1836,8 +1853,7 @@ def main() -> None:
                 except Exception as exc:
                     print(f"[AGENT] {exc}")
                     print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
-        finally:
-            return
+        return
 
     try:
         while True:
