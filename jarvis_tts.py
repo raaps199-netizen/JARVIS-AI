@@ -16,6 +16,7 @@ load_dotenv()
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+ELEVENLABS_LANGUAGE = os.getenv("ELEVENLABS_LANGUAGE", "id")
 
 _interrupt_event = threading.Event()
 _elevenlabs_quota_exhausted = False
@@ -41,17 +42,50 @@ def _speech_interrupted() -> bool:
     return _interrupt_event.is_set()
 
 
+def _voice_metadata(voice) -> str:
+    parts = [
+        getattr(voice, "name", ""),
+        getattr(voice, "id", ""),
+    ]
+    for language in getattr(voice, "languages", []) or []:
+        if isinstance(language, bytes):
+            try:
+                language = language.decode("utf-8", errors="ignore")
+            except Exception:
+                language = str(language)
+        parts.append(str(language))
+    return " ".join(parts).lower()
+
+
+def _is_indonesian_voice(voice) -> bool:
+    meta = _voice_metadata(voice)
+    return any(token in meta for token in (
+        "indonesia",
+        "indonesian",
+        "id-id",
+        "id_id",
+        "id-id",
+        "ind",
+    ))
+
+
 def _fallback_speak(text: str) -> None:
     # Buat engine baru setiap utterance agar event loop pyttsx3 tidak bentrok.
     engine = pyttsx3.init()
     engine.setProperty("rate", 172)
     engine.setProperty("volume", 1.0)
 
-    for voice in engine.getProperty("voices"):
-        meta = f"{getattr(voice, 'name', '')} {getattr(voice, 'id', '')} {getattr(voice, 'languages', '')}".lower()
-        if any(token in meta for token in ("indonesia", "indonesian", "id-id", "id_id")):
-            engine.setProperty("voice", voice.id)
-            break
+    voices = engine.getProperty("voices") or []
+    chosen_voice = next((voice for voice in voices if _is_indonesian_voice(voice)), None)
+
+    if chosen_voice:
+        engine.setProperty("voice", chosen_voice.id)
+        print(f"[TTS] Windows voice: {getattr(chosen_voice, 'name', chosen_voice.id)}")
+    else:
+        print("[TTS] Voice Bahasa Indonesia tidak ditemukan. Menggunakan voice Windows default.")
+        print("[TTS] Voice tersedia:")
+        for voice in voices:
+            print(f"       - {getattr(voice, 'name', voice.id)} | {getattr(voice, 'id', '')}")
 
     try:
         engine.say(text)
@@ -76,7 +110,7 @@ def _elevenlabs_speak(text: str) -> bool:
     payload = json.dumps({
         "text": text,
         "model_id": ELEVENLABS_MODEL,
-        "language_code": "id",
+        "language_code": ELEVENLABS_LANGUAGE,
         "voice_settings": {
             "stability": 0.48,
             "similarity_boost": 0.78,
