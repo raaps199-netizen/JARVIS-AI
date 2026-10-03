@@ -205,13 +205,13 @@ function queueSpeech(text,flush=false){
 
   while(speechBuffer.trim()){
     let cutAt = -1;
-    const sentenceEnd = /[.!?。！？]["')\\]]*\\s+/.exec(speechBuffer);
+    const sentenceEnd = /[.!?。！？]["')\]]*\s+/.exec(speechBuffer);
 
     // Speak a sentence as soon as it arrives. For long sentences, start sooner.
     if(sentenceEnd){
       cutAt = sentenceEnd.index + sentenceEnd[0].length;
     }else if(speechBuffer.length >= 48){
-      const comma = /[,;:]\\s+/.exec(speechBuffer);
+      const comma = /[,;:]\s+/.exec(speechBuffer);
       if(comma && comma.index < 72){
         cutAt = comma.index + comma[0].length;
       }else if(speechBuffer.length >= 88){
