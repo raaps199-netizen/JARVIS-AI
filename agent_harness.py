@@ -94,6 +94,8 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"open_folder","description":"Open a common user folder.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["home","desktop","documents","downloads"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"type_text","description":"Type exact text into the currently focused desktop application when explicitly requested.","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"press_key","description":"Press an allowlisted keyboard key or shortcut.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}},
+    {"type":"function","function":{"name":"close_active_window","description":"Close the currently focused Windows application/window using Alt+F4.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"stop_jarvis","description":"Stop JARVIS listening and end the current assistant process when the user explicitly asks JARVIS to stop or turn itself off.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"pc_status","description":"Read basic non-sensitive computer status.","parameters":{"type":"object","properties":{}}}}
 ]
 
@@ -170,9 +172,23 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return press_key(str(arguments["key"]))
     if name == "pc_status":
         return pc_status()
-    if name == "pc_status":
-        return pc_status()
+    if name == "close_active_window":
+        return close_active_window()
+    if name == "stop_jarvis":
+        return stop_jarvis()
     return f"Tool {name} tidak dikenal."
+
+
+def close_active_window() -> str:
+    try:
+        pyautogui.hotkey("alt", "f4")
+        return "Jendela aktif ditutup dengan Alt+F4."
+    except Exception as exc:
+        return f"Gagal menutup jendela aktif: {exc}"
+
+
+def stop_jarvis() -> str:
+    return "__JARVIS_STOP__"
 
 
 def ask_agent(client: Groq, user_text: str) -> str:
@@ -341,6 +357,16 @@ def try_direct_command(text: str) -> str | None:
                     print(f"[DIRECT] open + type -> {result}")
                     return result
 
+    close_phrases = {
+        "tutup", "tutup jendela", "tutup aplikasi", "tutup notepad",
+        "tutup calculator", "tutup kalkulator", "tutup chrome", "tutup word",
+        "tutup vscode", "tutup vs code", "tutup explorer", "tutup task manager",
+    }
+    if normalized in close_phrases or normalized.startswith("tutup "):
+        result = close_active_window()
+        print(f"[DIRECT] close_active_window -> {result}")
+        return result
+
     key_aliases = {
         "enter": "enter", "tekan enter": "enter", "escape": "esc", "esc": "esc",
         "tab": "tab", "hapus": "backspace", "backspace": "backspace",
@@ -432,9 +458,14 @@ def main() -> None:
             if normalized in {
                 "shutdown jarvis",
                 "matikan jarvis",
+                "matikan diri",
+                "matikan diri sendiri",
+                "matikan dirimu",
+                "matikan diri lu",
                 "berhenti mendengarkan",
                 "matikan mode suara",
                 "stop jarvis",
+                "stop diri sendiri",
             }:
                 speak("Mode suara dihentikan, Sir.")
                 break
@@ -446,6 +477,9 @@ def main() -> None:
 
             try:
                 reply = ask_agent(client, heard)
+                if reply == "__JARVIS_STOP__":
+                    speak("Baik, Sir. Saya mematikan sistem JARVIS.")
+                    break
                 if reply:
                     speak(reply)
             except Exception as exc:
