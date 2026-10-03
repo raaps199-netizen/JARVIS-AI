@@ -1,7 +1,7 @@
 """JARVIS local desktop agent.
 
-Microphone -> speech recognition -> OpenAI reasoning/tool calling -> PC action -> voice.
-The agent uses an allowlisted tool set instead of arbitrary shell execution.
+Microphone -> Gemini speech-to-text/reasoning -> tool calling -> PC action -> voice.
+The PC tool set is intentionally allowlisted instead of exposing arbitrary shell access.
 """
 from __future__ import annotations
 
@@ -10,23 +10,23 @@ import os
 import platform
 import shutil
 import subprocess
+import time
+import wave
 import webbrowser
 from pathlib import Path
 from typing import Any
 
-import time
-import wave
-
 import sounddevice as sd
 from dotenv import load_dotenv
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 from jarvis_tts import speak
 
 load_dotenv()
 
-MODEL = os.getenv("JARVIS_MODEL", "gpt-6-luna")
-TRANSCRIPTION_LANGUAGE = os.getenv("JARVIS_LANGUAGE", "id")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 
@@ -77,9 +77,8 @@ FOLDERS = {
     "downloads": Path.home() / "Downloads",
 }
 
-TOOLS = [
+TOOL_DECLARATIONS = [
     {
-        "type": "function",
         "name": "open_app",
         "description": "Open an approved Windows application.",
         "parameters": {
@@ -94,11 +93,9 @@ TOOLS = [
                 }
             },
             "required": ["name"],
-            "additionalProperties": False,
         },
     },
     {
-        "type": "function",
         "name": "open_site",
         "description": "Open an approved website in the default browser.",
         "parameters": {
@@ -110,11 +107,9 @@ TOOLS = [
                 }
             },
             "required": ["name"],
-            "additionalProperties": False,
         },
     },
     {
-        "type": "function",
         "name": "open_folder",
         "description": "Open a common user folder in Windows Explorer.",
         "parameters": {
@@ -126,20 +121,19 @@ TOOLS = [
                 }
             },
             "required": ["name"],
-            "additionalProperties": False,
         },
     },
     {
-        "type": "function",
         "name": "pc_status",
         "description": "Read basic non-sensitive computer status.",
         "parameters": {
             "type": "object",
             "properties": {},
-            "additionalProperties": False,
         },
     },
 ]
+
+TOOLS = [types.Tool(function_declarations=TOOL_DECLARATIONS)]
 
 
 def open_app(name: str) -> str:
@@ -197,44 +191,52 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
     return f"Tool {name} tidak dikenal."
 
 
-def ask_agent(client: OpenAI, user_text: str) -> str:
-    response = client.responses.create(
-        model=MODEL,
-        instructions=SYSTEM_PROMPT,
-        input=user_text,
+def ask_agent(client: genai.Client, user_text: str) -> str:
+    contents = [
+        types.Content(
+            role="user",
+            parts=[types.Part(text=user_text)],
+        )
+    ]
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
         tools=TOOLS,
+        temperature=0.7,
     )
 
     for _ in range(5):
-        calls = [
-            item for item in response.output
-            if getattr(item, "type", None) == "function_call"
-        ]
-        if not calls:
-            return response.output_text.strip()
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=contents,
+            config=config,
+        )
 
-        tool_outputs = []
+        calls = response.function_calls or []
+        if not calls:
+            return (response.text or "").strip()
+
+        contents.append(response.candidates[0].content)
+
         for call in calls:
             try:
-                arguments = json.loads(call.arguments or "{}")
+                arguments = dict(call.args or {})
                 result = run_tool(call.name, arguments)
             except Exception as exc:
                 result = f"Tool error: {exc}"
 
             print(f"[TOOL] {call.name} -> {result}")
-            tool_outputs.append({
-                "type": "function_call_output",
-                "call_id": call.call_id,
-                "output": result,
-            })
-
-        response = client.responses.create(
-            model=MODEL,
-            instructions=SYSTEM_PROMPT,
-            previous_response_id=response.id,
-            input=tool_outputs,
-            tools=TOOLS,
-        )
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_function_response(
+                            name=call.name,
+                            response={"result": result},
+                            id=getattr(call, "id", None),
+                        )
+                    ],
+                )
+            )
 
     return "Saya berhenti setelah beberapa langkah tool agar tidak masuk loop."
 
@@ -255,23 +257,31 @@ def record_audio(path: Path) -> None:
         wav.writeframes(recording.tobytes())
 
 
-def transcribe(client: OpenAI, path: Path) -> str:
-    with path.open("rb") as audio_file:
-        result = client.audio.transcriptions.create(
-            model=os.getenv("JARVIS_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"),
-            file=audio_file,
-            language=TRANSCRIPTION_LANGUAGE,
-        )
-    return result.text.strip()
+def transcribe(client: genai.Client, path: Path) -> str:
+    audio_bytes = path.read_bytes()
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=[
+            types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
+            types.Part(
+                text=(
+                    "Transkripsikan audio ini ke teks bahasa Indonesia. "
+                    "Tulis hanya apa yang diucapkan, tanpa penjelasan tambahan. "
+                    "Kalau tidak ada ucapan yang jelas, balas kosong."
+                )
+            ),
+        ],
+        config=types.GenerateContentConfig(temperature=0),
+    )
+    return (response.text or "").strip()
 
 
 def main() -> None:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("OPENAI_API_KEY belum diatur.")
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY belum diatur.")
         return
 
-    client = OpenAI(api_key=api_key)
+    client = genai.Client(api_key=GEMINI_API_KEY)
     speak("Sistem aktif, Sir. Saya siap mendengarkan.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
 
@@ -287,7 +297,7 @@ def main() -> None:
                 continue
             except Exception as exc:
                 print(f"[STT] {exc}")
-                speak("Pengenalan suara gagal. Periksa koneksi dan API key.")
+                speak("Pengenalan suara gagal. Periksa koneksi dan Gemini API key.")
                 time.sleep(2)
                 continue
 
