@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JARVIS Control</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07090d; --panel:#0d1118; --panel2:#111722; --line:#202938; --text:#e8edf5; --muted:#8994a5; }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:radial-gradient(circle at 80% 0%,rgba(98,182,255,.12),transparent 30%),radial-gradient(circle at 10% 100%,rgba(155,124,255,.10),transparent 30%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+    .layout{width:min(1100px,94vw);margin:0 auto;padding:32px 0;display:grid;grid-template-columns:260px 1fr;gap:18px;min-height:100vh}
+    .panel{background:rgba(13,17,24,.88);border:1px solid var(--line);border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.28);backdrop-filter:blur(12px)}
+    aside{padding:22px}.brand{display:flex;gap:12px;align-items:center;margin-bottom:28px}
+    .orb{width:42px;height:42px;border-radius:50%;background:radial-gradient(circle,#d9f0ff 0 8%,#62b6ff 9% 28%,#284c73 45%,transparent 70%);box-shadow:0 0 28px rgba(98,182,255,.45)}
+    .brand h1{margin:0;font-size:18px;letter-spacing:.12em}.brand small{color:var(--muted)}
+    .status{padding:14px;border:1px solid var(--line);border-radius:14px;margin-bottom:18px}
+    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff6b7a;margin-right:8px}.dot.online{background:#65e6a0;box-shadow:0 0 10px rgba(101,230,160,.6)}
+    .label{color:var(--muted);font-size:12px}.value{margin-top:5px;font-size:14px}
+    .side-title{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.14em;margin:22px 0 10px}
+    .quick{width:100%;text-align:left;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-bottom:8px;cursor:pointer}.quick:hover{border-color:#38506d}
+    main{display:flex;flex-direction:column;min-height:calc(100vh - 64px)}
+    header{padding:20px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+    header h2{margin:0;font-size:17px}header span{color:var(--muted);font-size:12px}
+    #chat{flex:1;padding:22px;overflow-y:auto;min-height:430px}.msg{display:flex;margin:12px 0}.msg.user{justify-content:flex-end}
+    .bubble{max-width:78%;padding:12px 14px;border-radius:15px;line-height:1.5;white-space:pre-wrap;font-size:14px}
+    .assistant .bubble{background:var(--panel2);border:1px solid var(--line)}.user .bubble{background:#18304a;border:1px solid #284c73}
+    .composer{padding:16px;border-top:1px solid var(--line)}form{display:flex;gap:10px}
+    input{flex:1;min-width:0;background:#080c12;border:1px solid var(--line);color:var(--text);border-radius:13px;padding:13px 14px;outline:none}
+    input:focus{border-color:#3c638b}button.send{border:0;border-radius:13px;padding:0 19px;color:white;background:linear-gradient(135deg,#2d7fbd,#6650b7);cursor:pointer;font-weight:600}
+    button:disabled{opacity:.5;cursor:not-allowed}.hint{color:var(--muted);font-size:11px;margin-top:9px}
+    @media(max-width:760px){.layout{grid-template-columns:1fr;padding:14px 0}aside{display:none}main{min-height:calc(100vh - 28px)}}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="panel">
+    <div class="brand"><div class="orb"></div><div><h1>JARVIS</h1><small>CONTROL CENTER</small></div></div>
+    <div class="status"><div class="label">SYSTEM STATUS</div><div class="value"><span id="dot" class="dot"></span><span id="statusText">Checking...</span></div></div>
+    <div class="side-title">Quick commands</div>
+    <button class="quick" data-message="Halo Jarvis">👋 Halo Jarvis</button>
+    <button class="quick" data-message="Jelaskan status prototype kita sekarang.">📊 Status prototype</button>
+    <button class="quick" data-message="Bantu gue merencanakan fitur berikutnya untuk Jarvis.">🧠 Rencanakan fitur</button>
+    <div class="side-title">Current stage</div><div class="label">Stage 1</div><div class="value">Web → AI → Web</div>
+    <div class="hint">Mic, speaker, wake word, dan musik menyusul.</div>
+  </aside>
+  <main class="panel">
+    <header><div><h2>JARVIS Console</h2><span>Local control dashboard</span></div><span>API</span></header>
+    <section id="chat"><div class="msg assistant"><div class="bubble">JARVIS online. Dashboard siap menerima perintah.</div></div></section>
+    <div class="composer">
+      <form id="form"><input id="input" autocomplete="off" placeholder="Ketik perintah ke Jarvis..." autofocus><button class="send" id="send" type="submit">Kirim</button></form>
+      <div class="hint">Perintah dikirim ke Python di laptop. API key tetap berada di server lokal, bukan di browser.</div>
+    </div>
+  </main>
+</div>
+<script>
+const chat=document.getElementById("chat"),input=document.getElementById("input"),send=document.getElementById("send"),dot=document.getElementById("dot"),statusText=document.getElementById("statusText");
+function addMessage(text,role){const row=document.createElement("div");row.className="msg "+role;const bubble=document.createElement("div");bubble.className="bubble";bubble.textContent=text;row.appendChild(bubble);chat.appendChild(row);chat.scrollTop=chat.scrollHeight;}
+async function checkStatus(){try{const res=await fetch("/api/status");const data=await res.json();dot.classList.toggle("online",data.online);statusText.textContent=data.online?"Online":"Offline";}catch{statusText.textContent="Server tidak aktif";}}
+async function sendMessage(message){if(!message||send.disabled)return;addMessage(message,"user");input.value="";send.disabled=true;input.disabled=true;try{const res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})});const data=await res.json();addMessage(data.reply||("Error: "+(data.error||"Unknown error")),"assistant");}catch(error){addMessage("Tidak bisa menghubungi server JARVIS: "+error.message,"assistant");}finally{send.disabled=false;input.disabled=false;input.focus();checkStatus();}}
+document.getElementById("form").addEventListener("submit",e=>{e.preventDefault();sendMessage(input.value.trim());});
+document.querySelectorAll(".quick").forEach(button=>button.addEventListener("click",()=>sendMessage(button.dataset.message)));
+checkStatus();
+</script>
+</body>
+</html>
