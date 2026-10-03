@@ -297,7 +297,6 @@ def record_audio(path: Path) -> None:
     chunks = []
     started = False
     quiet_count = 0
-    wait_count = 0
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
@@ -305,24 +304,27 @@ def record_audio(path: Path) -> None:
         dtype="int16",
         blocksize=block_size,
     ) as stream:
-        for _ in range(max_blocks):
+        # Wait indefinitely for the first real speech signal.
+        # START_TIMEOUT_SECONDS=0 means "no timeout", not "wait one block".
+        while not started:
             data, _ = stream.read(block_size)
             chunk = data.copy()
             energy = float(abs(chunk).mean())
 
-            if not started:
-                if energy >= ENERGY_THRESHOLD:
-                    started = True
-                    chunks.append(chunk)
-                    quiet_count = 0
-                    print("[MIC] Suara terdeteksi.")
-                else:
-                    wait_count += 1
-                    if wait_count >= start_timeout_blocks:
-                        break
-                continue
+            if energy >= ENERGY_THRESHOLD:
+                started = True
+                chunks.append(chunk)
+                quiet_count = 0
+                print("[MIC] Suara terdeteksi.")
 
+        # Once speech starts, record until silence or the 6-second cap.
+        remaining_blocks = max_blocks - 1
+        for _ in range(max(0, remaining_blocks)):
+            data, _ = stream.read(block_size)
+            chunk = data.copy()
+            energy = float(abs(chunk).mean())
             chunks.append(chunk)
+
             if energy < ENERGY_THRESHOLD:
                 quiet_count += 1
                 if len(chunks) >= min_blocks and quiet_count >= silence_blocks:
