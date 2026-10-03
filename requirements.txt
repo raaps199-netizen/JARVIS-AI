@@ -1,4 +1,2 @@
 openai
 python-dotenv
-SpeechRecognition
-PyAudio
