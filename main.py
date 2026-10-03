@@ -1,6 +1,6 @@
 """
 JARVIS-AI
-Text prototype + Flask web app.
+Text + streaming web voice assistant.
 
 Local text mode:
     python main.py
@@ -9,10 +9,11 @@ Web mode:
     Flask uses the top-level "app" object below.
 """
 
+import json
 import os
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from openai import OpenAI
 
 load_dotenv()
@@ -70,20 +71,34 @@ def ask_jarvis(client: OpenAI, user_message: str) -> str:
     return response.output_text.strip()
 
 
+def stream_jarvis(client: OpenAI, user_message: str):
+    stream = client.responses.create(
+        model=MODEL,
+        instructions=SYSTEM_PROMPT,
+        input=user_message,
+        stream=True,
+    )
+
+    for event in stream:
+        if event.type == "response.output_text.delta":
+            yield event.delta
+
+
 def transcribe_audio(client: OpenAI, audio_file):
-    # Flask gives us a FileStorage object. The OpenAI SDK expects bytes,
-    # a file-like object, a PathLike, or a supported upload tuple.
     audio_bytes = audio_file.read()
 
     transcript = client.audio.transcriptions.create(
         model=TRANSCRIPTION_MODEL,
-        file=(audio_file.filename or "jarvis-voice.webm", audio_bytes, audio_file.mimetype or "audio/webm"),
+        file=(
+            audio_file.filename or "jarvis-voice.webm",
+            audio_bytes,
+            audio_file.mimetype or "audio/webm",
+        ),
         language="id",
     )
     return transcript.text.strip()
 
 
-# Vercel detects this top-level Flask app automatically.
 app = Flask(__name__)
 
 try:
@@ -130,6 +145,43 @@ def chat():
         return jsonify({"reply": reply})
     except Exception as error:
         return jsonify({"error": str(error)}), 500
+
+
+@app.post("/api/chat/stream")
+def chat_stream():
+    global client, startup_error
+
+    data = request.get_json(silent=True) or {}
+    message = str(data.get("message", "")).strip()
+
+    if not message:
+        return jsonify({"error": "Pesan kosong."}), 400
+
+    if client is None:
+        try:
+            client = create_client()
+            startup_error = None
+        except Exception as error:
+            startup_error = str(error)
+            return jsonify({"error": startup_error}), 500
+
+    def generate():
+        try:
+            for delta in stream_jarvis(client, message):
+                yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
+
+            yield "data: [DONE]\n\n"
+        except Exception as error:
+            yield f"data: {json.dumps({'error': str(error)}, ensure_ascii=False)}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/transcribe")
