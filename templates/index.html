@@ -100,6 +100,7 @@ let voiceMuted=false;
 let voiceRestartPending=false;
 let voiceTranscript="";
 let voicePauseTimer=null;
+let voiceFinalizePending=false;
 let voiceRequestBusy=false;
 let speechQueue=[];
 let isSpeaking=false;
@@ -616,14 +617,20 @@ if(SpeechRecognition){
       else interim += result[0].transcript;
     }
     input.value=(voiceTranscript+" "+interim).trim();
-    if(voiceTranscript.trim()){
-      clearTimeout(voicePauseTimer);
+
+    // Debounce setiap hasil, termasuk interim. Jangan potong kalimat di jeda
+    // pendek antar kata; tunggu sampai pengguna benar-benar selesai bicara.
+    clearTimeout(voicePauseTimer);
+    if(voiceTranscript.trim() || interim.trim()){
       voicePauseTimer=setTimeout(()=>{
+        if(!voiceMode || voiceRequestBusy) return;
+        voiceFinalizePending=true;
         if(isListening){
-          voiceRestartPending=true;
-          try{ recognition.stop(); }catch(error){}
+          try{ recognition.stop(); }catch(error){ processVoiceTurn(); }
+        }else{
+          processVoiceTurn();
         }
-      },850);
+      },1700);
     }
   };
 
@@ -638,20 +645,20 @@ if(SpeechRecognition){
     }
   };
 
-  recognition.onend=async()=>{
+  recognition.onend=()=>{
     isListening=false;
-    clearTimeout(voicePauseTimer);
     if(!voiceMode) return;
-    if(voiceTranscript.trim()){
-      await processVoiceTurn();
+
+    // Browser bisa mengakhiri satu segmen sendiri. Simpan teksnya dan lanjut
+    // mendengarkan sampai timer jeda benar-benar habis, jangan kirim per segmen.
+    if(voiceFinalizePending && voiceTranscript.trim()){
+      voiceFinalizePending=false;
+      clearTimeout(voicePauseTimer);
+      processVoiceTurn();
       return;
     }
-    if(voiceRestartPending){
-      voiceRestartPending=false;
-      setTimeout(startVoiceRecognition,250);
-    }else{
-      setTimeout(startVoiceRecognition,250);
-    }
+    if(voiceRequestBusy) return;
+    setTimeout(startVoiceRecognition,250);
   };
 
   mic.addEventListener("click",()=>{
