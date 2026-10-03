@@ -1,14 +1,18 @@
 """
 JARVIS-AI
-Stage 1: text conversation prototype.
+Text prototype + Flask web app.
 
-Next stages:
-microphone -> speech-to-text -> AI -> text-to-speech -> speaker
+Local text mode:
+    python main.py
+
+Web mode:
+    Flask uses the top-level "app" object below.
 """
 
 import os
 
 from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
 
 load_dotenv()
@@ -27,8 +31,7 @@ The user is Indonesian, so Indonesian is the default language unless they use an
 def create_client() -> OpenAI:
     if not API_KEY:
         raise RuntimeError(
-            "OPENAI_API_KEY belum diatur. Buat file .env dari .env.example "
-            "dan masukkan API key di sana."
+            "OPENAI_API_KEY belum diatur. Masukkan API key sebagai environment variable."
         )
 
     return OpenAI(api_key=API_KEY)
@@ -41,6 +44,55 @@ def ask_jarvis(client: OpenAI, user_message: str) -> str:
         input=user_message,
     )
     return response.output_text.strip()
+
+
+# Vercel detects this top-level Flask app automatically.
+app = Flask(__name__)
+
+try:
+    client = create_client()
+    startup_error = None
+except Exception as error:
+    client = None
+    startup_error = str(error)
+
+
+@app.get("/")
+def index():
+    return render_template("index.html")
+
+
+@app.get("/api/status")
+def status():
+    return jsonify({
+        "online": client is not None,
+        "error": startup_error,
+    })
+
+
+@app.post("/api/chat")
+def chat():
+    global client, startup_error
+
+    data = request.get_json(silent=True) or {}
+    message = str(data.get("message", "")).strip()
+
+    if not message:
+        return jsonify({"error": "Pesan kosong."}), 400
+
+    if client is None:
+        try:
+            client = create_client()
+            startup_error = None
+        except Exception as error:
+            startup_error = str(error)
+            return jsonify({"error": startup_error}), 500
+
+    try:
+        reply = ask_jarvis(client, message)
+        return jsonify({"reply": reply})
+    except Exception as error:
+        return jsonify({"error": str(error)}), 500
 
 
 def main():
