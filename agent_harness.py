@@ -13,6 +13,7 @@ import subprocess
 import time
 import wave
 import webbrowser
+from urllib.parse import quote_plus
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,17 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "search_web",
+        "description": "Search the web using Google for the user's requested topic. Use this when the user asks to search, find, look up, or research something online.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "open_site",
         "description": "Open an approved website in the default browser.",
         "parameters": {
@@ -152,6 +164,18 @@ def open_app(name: str) -> str:
         return f"Gagal membuka {name}: {exc}"
 
 
+def search_web(query: str) -> str:
+    query = str(query).strip()
+    if not query:
+        return "Query pencarian kosong."
+    try:
+        url = "https://www.google.com/search?q=" + quote_plus(query)
+        opened = webbrowser.open(url, new=2)
+        return f"Berhasil mencari {query} di Google." if opened else "Browser menolak membuka hasil pencarian."
+    except OSError as exc:
+        return f"Gagal melakukan pencarian: {exc}"
+
+
 def open_site(name: str) -> str:
     if name not in SITES:
         return f"Website {name} belum tersedia."
@@ -188,6 +212,8 @@ def pc_status() -> str:
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
     if name == "open_app":
         return open_app(str(arguments["name"]))
+    if name == "search_web":
+        return search_web(str(arguments["query"]))
     if name == "open_site":
         return open_site(str(arguments["name"]))
     if name == "open_folder":
