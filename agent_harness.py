@@ -95,6 +95,7 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"type_text","description":"Type exact text into the currently focused desktop application when explicitly requested.","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"press_key","description":"Press an allowlisted keyboard key or shortcut.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}},
     {"type":"function","function":{"name":"close_active_window","description":"Close the currently focused Windows application/window using Alt+F4.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"close_app","description":"Close one specific approved application by its process/window, without closing whichever unrelated window happens to be focused.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["notepad","calculator","chrome","vscode","word","explorer","task manager"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"stop_jarvis","description":"Stop JARVIS listening and end the current assistant process when the user explicitly asks JARVIS to stop or turn itself off.","parameters":{"type":"object","properties":{}}}},
     {"type":"function","function":{"name":"pc_status","description":"Read basic non-sensitive computer status.","parameters":{"type":"object","properties":{}}}}
 ]
@@ -261,9 +262,85 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return pc_status()
     if name == "close_active_window":
         return close_active_window()
+    if name == "close_app":
+        return close_app(str(arguments["name"]))
     if name == "stop_jarvis":
         return stop_jarvis()
     return f"Tool {name} tidak dikenal."
+
+
+def _windows_process_name_from_hwnd(hwnd: int) -> str:
+    """Return the executable name owning a top-level window, if available."""
+    if os.name != "nt":
+        return ""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+    if not pid.value:
+        return ""
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not handle:
+        return ""
+    try:
+        size = wintypes.DWORD(1024)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return Path(buffer.value).name.lower()
+    finally:
+        kernel32.CloseHandle(handle)
+    return ""
+
+
+def close_app(name: str) -> str:
+    """Close a specific approved application, not whichever window happens to be focused."""
+    exe_map = {
+        "notepad": "notepad.exe",
+        "calculator": "calculatorapp.exe",
+        "chrome": "chrome.exe",
+        "vscode": "code.exe",
+        "word": "winword.exe",
+        "explorer": "explorer.exe",
+        "task manager": "taskmgr.exe",
+    }
+    target = exe_map.get(name)
+    if not target:
+        return f"Aplikasi {name} tidak bisa ditutup secara spesifik."
+    if os.name != "nt":
+        return "Penutupan aplikasi spesifik hanya didukung di Windows."
+
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    WM_CLOSE = 0x0010
+    matches = []
+
+    @wintypes.BOOL
+    def enum_window(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        process_name = _windows_process_name_from_hwnd(hwnd)
+        if process_name == target:
+            matches.append(hwnd)
+        return True
+
+    user32.EnumWindows(enum_window, 0)
+    if not matches:
+        return f"{name} tidak sedang terbuka."
+
+    closed = 0
+    for hwnd in matches:
+        if user32.PostMessageW(hwnd, WM_CLOSE, 0, 0):
+            closed += 1
+
+    if closed:
+        return f"Berhasil menutup {name}."
+    return f"Gagal menutup {name}."
 
 
 def close_active_window() -> str:
@@ -429,23 +506,16 @@ def try_direct_command(text: str) -> str | None:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
         return "__JARVIS_STOP__"
 
-    stop_phrases = {
-        "matikan jarvis", "matikan diri", "matikan diri sendiri", "matikan dirimu",
-        "matikan diri lu", "matikan diri lo", "matikan diri sendiri lu",
-        "matikan diri sendiri lo", "stop jarvis", "shutdown jarvis",
-    }
-    if normalized in stop_phrases:
-        print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
-        return "__JARVIS_STOP__"
-
     typing_prefixes = ("ketik ", "tulis ", "ketikkan ")
+    original_clean = " ".join(text.strip().split())
+    original_lower = original_clean.lower()
     for prefix in typing_prefixes:
-        if normalized.startswith(prefix):
-            text = normalized[len(prefix):].strip()
-            if text.startswith(","):
-                text = text[1:].strip()
-            if text:
-                result = type_text(text)
+        if original_lower.startswith(prefix):
+            typed = original_clean[len(prefix):].strip()
+            if typed.startswith(","):
+                typed = typed[1:].strip()
+            if typed:
+                result = type_text(typed)
                 print(f"[DIRECT] type_text -> {result}")
                 return result
 
@@ -464,12 +534,26 @@ def try_direct_command(text: str) -> str | None:
                     print(f"[DIRECT] open + type -> {result}")
                     return result
 
-    close_phrases = {
-        "tutup", "tutup jendela", "tutup aplikasi", "tutup notepad",
-        "tutup calculator", "tutup kalkulator", "tutup chrome", "tutup word",
-        "tutup vscode", "tutup vs code", "tutup explorer", "tutup task manager",
+    close_aliases = {
+        "notepad": "notepad",
+        "calculator": "calculator",
+        "kalkulator": "calculator",
+        "chrome": "chrome",
+        "google chrome": "chrome",
+        "word": "word",
+        "microsoft word": "word",
+        "vscode": "vscode",
+        "vs code": "vscode",
+        "explorer": "explorer",
+        "task manager": "task manager",
     }
-    if normalized in close_phrases or normalized.startswith("tutup "):
+    close_target = normalized[6:].strip() if normalized.startswith("tutup ") else ""
+    if close_target in close_aliases:
+        app = close_aliases[close_target]
+        result = close_app(app)
+        print(f"[DIRECT] close_app({app}) -> {result}")
+        return result
+    if normalized in {"tutup", "tutup jendela", "tutup aplikasi"}:
         result = close_active_window()
         print(f"[DIRECT] close_active_window -> {result}")
         return result
@@ -579,6 +663,9 @@ def main() -> None:
 
             direct_reply = try_direct_command(heard)
             if direct_reply is not None:
+                if direct_reply == "__JARVIS_STOP__":
+                    speak("Baik, Sir. Saya mematikan sistem JARVIS.")
+                    break
                 speak(direct_reply)
                 continue
 
