@@ -192,6 +192,7 @@ def press_key(key: str) -> str:
         "ctrl+v": "ctrl+v",
         "ctrl+x": "ctrl+x",
         "ctrl+z": "ctrl+z",
+        "ctrl+h": "ctrl+h",
         "alt+f4": "alt+f4",
     }
     normalized = str(key).lower().replace(" ", "")
@@ -549,7 +550,7 @@ def try_direct_command(text: str) -> str | None:
     normalized = " ".join(text.lower().strip().split())
     # Whisper/Groq can mishear "Jarvis" as "Jervis", "Yervis", or "Surface".
     # Treat these common wake-name variants as the same command prefix.
-    prefixes = ("tolong ", "jarvis ", "jervis ", "yervis ", "surface ", "sir ", "bisa ")
+    prefixes = ("tolong ", "jarvis ", "jervis ", "yervis ", "surface ", "service ", "sir ", "bisa ")
 
     for prefix in prefixes:
         if normalized.startswith(prefix):
@@ -607,7 +608,7 @@ def try_direct_command(text: str) -> str | None:
         return result
 
     stop_phrases = {
-        "matikan jarvis", "matikan diri", "matikan diri sendiri", "matikan dirimu",
+        "matikan jarvis", "matikan diri", "matikan diri sendiri", "matikan dirimu", "matikan diri anda", "matikan dirimu sendiri",
         "matikan diri lu", "matikan diri lo", "matikan diri sendiri lu",
         "matikan diri sendiri lo", "stop jarvis", "shutdown jarvis",
         "matikan diri sendiri", "matikan jervis", "matikan yervis", "matikan surface",
