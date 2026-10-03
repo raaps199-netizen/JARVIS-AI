@@ -224,9 +224,29 @@ def word_control(
             return "Dokumen Word baru berhasil dibuat."
 
         if action == "write":
-            if text:
-                sel.TypeText(str(text))
-            return "Teks berhasil ditulis di Word."
+            if not text:
+                return "Teks kosong."
+            start = sel.Range.Start
+            sel.TypeText(str(text))
+            end = sel.Range.End
+            inserted = doc.Range(start, end)
+            if bold is not None:
+                inserted.Font.Bold = -1 if bold else 0
+            if italic is not None:
+                inserted.Font.Italic = -1 if italic else 0
+            if underline is not None:
+                inserted.Font.Underline = 1 if underline else 0
+            if font_size is not None:
+                inserted.Font.Size = float(font_size)
+            if style:
+                try:
+                    inserted.Style = style
+                except Exception:
+                    pass
+            alignments = {"left": 0, "center": 1, "right": 2, "justify": 3}
+            if alignment in alignments:
+                inserted.ParagraphFormat.Alignment = alignments[alignment]
+            return "Teks berhasil ditulis dan diformat di Word."
 
         if action == "format_selection":
             fmt = sel.Font
