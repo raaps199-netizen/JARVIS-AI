@@ -18,6 +18,7 @@ import pyautogui
 import cv2
 import pyperclip
 from pywinauto import Desktop
+import win32com.client
 from urllib.parse import quote_plus
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,14 @@ elements by their displayed text, scrolling, waiting for UI changes, and reading
 basic non-sensitive UI status. When the user asks to operate a desktop application,
 actually perform the requested UI steps instead of merely explaining them.
 
+WORD HAS DEEP CONTROL: When Microsoft Word is active and the user asks to write,
+format, edit, select, style, align, change font/size, insert tables, read the
+current document, or save the document, use the Word tools below instead of
+pretending that generic typing is enough. You may use Word's COM automation to
+operate the active document and its selection. Preserve the user's intended
+content and do not perform destructive document operations unless explicitly
+requested.
+
 Do not invent access to files or system state. Do not execute destructive,
 credential-stealing, surveillance, financial, or otherwise dangerous actions.
 For actions that could delete data, shut down the machine, install unknown
@@ -102,6 +111,8 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"open_site","description":"Open an approved website.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["youtube","google","github","chatgpt"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"open_folder","description":"Open a common user folder.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["home","desktop","documents","downloads"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"type_text","description":"Type exact text into the currently focused desktop application when explicitly requested.","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
+
+    {"type":"function","function":{"name":"word_control","description":"Deeply control Microsoft Word through its active document. Use for Word-specific writing, formatting, editing, selection, alignment, styles, font size, tables, reading document text, and saving. Actions: new_document, write, format_selection, select_all, insert_table, replace_text, read_document, save, save_as.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["new_document","write","format_selection","select_all","insert_table","replace_text","read_document","save","save_as"]},"text":{"type":"string"},"replacement":{"type":"string"},"font_size":{"type":"number"},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"underline":{"type":"boolean"},"alignment":{"type":"string","enum":["left","center","right","justify"]},"style":{"type":"string"},"rows":{"type":"integer"},"columns":{"type":"integer"},"path":{"type":"string"}},"required":["action"]}}},
 
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"ui_inspect","description":"Inspect visible non-sensitive Windows UI controls so JARVIS can understand what is currently on screen before clicking. Do not use it to retrieve passwords or sensitive fields.","parameters":{"type":"object","properties":{"window_title":{"type":"string"}}}}},
@@ -173,6 +184,114 @@ def pc_status() -> str:
         f"Python: {platform.python_version()}; "
         f"ruang kosong: {free_gb:.1f} GB."
     )
+
+
+def _get_word_app():
+    try:
+        app = win32com.client.GetActiveObject("Word.Application")
+    except Exception:
+        app = win32com.client.Dispatch("Word.Application")
+    app.Visible = True
+    try:
+        app.Activate()
+    except Exception:
+        pass
+    return app
+
+
+def word_control(
+    action: str,
+    text: str = "",
+    replacement: str = "",
+    font_size: float | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
+    alignment: str = "",
+    style: str = "",
+    rows: int = 0,
+    columns: int = 0,
+    path: str = "",
+) -> str:
+    """Perform structured, non-arbitrary automation against Microsoft Word."""
+    try:
+        app = _get_word_app()
+        doc = app.ActiveDocument if app.Documents.Count else app.Documents.Add()
+        sel = app.Selection
+
+        if action == "new_document":
+            app.Documents.Add()
+            return "Dokumen Word baru berhasil dibuat."
+
+        if action == "write":
+            if text:
+                sel.TypeText(str(text))
+            return "Teks berhasil ditulis di Word."
+
+        if action == "format_selection":
+            fmt = sel.Font
+            if bold is not None:
+                fmt.Bold = -1 if bold else 0
+            if italic is not None:
+                fmt.Italic = -1 if italic else 0
+            if underline is not None:
+                fmt.Underline = 1 if underline else 0
+            if font_size is not None:
+                fmt.Size = float(font_size)
+            if style:
+                try:
+                    sel.Style = style
+                except Exception:
+                    pass
+            alignments = {"left": 0, "center": 1, "right": 2, "justify": 3}
+            if alignment in alignments:
+                sel.ParagraphFormat.Alignment = alignments[alignment]
+            return "Format teks Word berhasil diterapkan."
+
+        if action == "select_all":
+            doc.Content.Select()
+            return "Seluruh isi dokumen Word berhasil dipilih."
+
+        if action == "insert_table":
+            r = max(1, min(50, int(rows or 1)))
+            c = max(1, min(20, int(columns or 1)))
+            table = doc.Tables.Add(sel.Range, r, c)
+            table.Borders.Enable = True
+            return f"Tabel {r} x {c} berhasil dibuat di Word."
+
+        if action == "replace_text":
+            find = str(text)
+            if not find:
+                return "Teks yang dicari kosong."
+            rng = doc.Content
+            finder = rng.Find
+            finder.ClearFormatting()
+            finder.Replacement.ClearFormatting()
+            finder.Text = find
+            finder.Replacement.Text = str(replacement)
+            finder.Wrap = 1
+            finder.Execute(Replace=2)
+            return f"Teks '{find}' berhasil diganti."
+
+        if action == "read_document":
+            content = doc.Content.Text
+            content = content.replace("\r", "\n").strip()
+            return content[:12000] if content else "Dokumen Word masih kosong."
+
+        if action == "save":
+            doc.Save()
+            return "Dokumen Word berhasil disimpan."
+
+        if action == "save_as":
+            target = str(path).strip()
+            if not target:
+                return "Path penyimpanan kosong."
+            doc.SaveAs2(target)
+            return f"Dokumen Word berhasil disimpan sebagai {target}."
+
+        return f"Aksi Word '{action}' belum tersedia."
+    except Exception as exc:
+        return f"Gagal menjalankan Word control: {exc}"
 
 
 def type_text(text: str) -> str:
@@ -395,6 +514,21 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return open_folder(str(arguments["name"]))
     if name == "type_text":
         return type_text(str(arguments["text"]))
+    if name == "word_control":
+        return word_control(
+            str(arguments.get("action", "")),
+            str(arguments.get("text", "")),
+            str(arguments.get("replacement", "")),
+            arguments.get("font_size"),
+            arguments.get("bold"),
+            arguments.get("italic"),
+            arguments.get("underline"),
+            str(arguments.get("alignment", "")),
+            str(arguments.get("style", "")),
+            int(arguments.get("rows", 0) or 0),
+            int(arguments.get("columns", 0) or 0),
+            str(arguments.get("path", "")),
+        )
     if name == "ui_click": return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
     if name == "ui_inspect": return ui_inspect(str(arguments.get("window_title","")))
     if name == "see_screen": return see_screen(client, str(arguments["question"]))
@@ -772,8 +906,9 @@ def try_direct_command(text: str) -> str | None:
     typing_prefixes = ("ketik ", "tulis ", "ketikkan ")
     original_clean = " ".join(text.strip().split())
     original_lower = original_clean.lower()
+    word_format_terms = ("bold", "tebal", "italic", "miring", "underline", "garis bawah", "judul", "heading", "ukuran", "font", "rata tengah", "rata kiri", "rata kanan", "justify", "tabel", "table")
     for prefix in typing_prefixes:
-        if original_lower.startswith(prefix):
+        if original_lower.startswith(prefix) and not any(term in original_lower for term in word_format_terms):
             typed = original_clean[len(prefix):].strip()
             if typed.startswith(","):
                 typed = typed[1:].strip()
