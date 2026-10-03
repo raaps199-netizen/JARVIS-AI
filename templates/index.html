@@ -44,8 +44,18 @@
     <button class="quick" data-message="Jelaskan status prototype kita sekarang.">📊 Status prototype</button>
     <button class="quick" data-message="Bantu gue merencanakan fitur berikutnya untuk Jarvis.">🧠 Rencanakan fitur</button>
     <button class="quick" id="musicTest" type="button">🎵 Test musik</button>
+    <div class="side-title">Music</div>
+    <div class="music">
+      <div class="music-top"><div><div class="music-title" id="musicTitle">Belum ada lagu</div><div class="music-artist" id="musicArtist">Audius • free streaming</div></div><div>🎵</div></div>
+      <audio id="audio" controls preload="none"></audio>
+      <div class="music-controls">
+        <button id="musicPause" type="button">⏸ Pause</button>
+        <button id="musicResume" type="button">▶ Lanjut</button>
+        <button id="musicStop" type="button">⏹ Stop</button>
+      </div>
+    </div>
     <div class="side-title">Current stage</div><div class="label">Stage 2</div><div class="value">Streaming → Voice → Music</div>
-    <div class="hint">STT + streaming AI + browser TTS aktif. Voice API OpenAI tidak dipakai.</div>
+    <div class="hint">Music engine memakai Audius, yang menyediakan API untuk search dan stream. Lagu populer belum tentu tersedia di katalognya.</div>
   </aside>
   <main class="panel">
     <header><div><h2>JARVIS Console</h2><span>Realtime-ish voice + streaming AI</span></div><span>STREAM</span></header>
@@ -76,6 +86,11 @@ let finalTranscript="";
 let speechQueue=[];
 let isSpeaking=false;
 let speechBuffer="";
+const audio=document.getElementById("audio");
+const musicTitle=document.getElementById("musicTitle");
+const musicArtist=document.getElementById("musicArtist");
+const AUDIUS_API="https://discoveryprovider.audius.co/v1";
+const AUDIUS_APP="JARVIS-AI";
 
 function addMessage(text,role){
   const row=document.createElement("div");
@@ -142,20 +157,69 @@ function queueSpeech(text,flush=false){
   }
 }
 
-function musicSearch(query){
-  const cleanQuery=query.trim() || "lofi hip hop";
-  const url="https://www.youtube.com/results?search_query="+encodeURIComponent(cleanQuery);
-  window.open(url,"_blank","noopener,noreferrer");
+async function musicSearch(query){
+  const cleanQuery=query.trim();
+  if(!cleanQuery) return false;
+
+  try{
+    const url=AUDIUS_API+"/tracks/search?query="+encodeURIComponent(cleanQuery)+"&limit=10&app_name="+encodeURIComponent(AUDIUS_APP);
+    const res=await fetch(url);
+    if(!res.ok) throw new Error("Music search HTTP "+res.status);
+    const data=await res.json();
+    const tracks=(data.data||[]).filter(track=>track.is_streamable !== false);
+
+    if(!tracks.length){
+      addMessage("🎵 Lagu itu nggak ketemu di katalog Audius. Gue nggak bakal pura-pura nemu, karena itu cara tercepat bikin JARVIS jadi tukang bohong.","assistant");
+      return false;
+    }
+
+    const track=tracks[0];
+    const streamUrl=AUDIUS_API+"/tracks/"+encodeURIComponent(track.id)+"/stream?app_name="+encodeURIComponent(AUDIUS_APP);
+
+    audio.src=streamUrl;
+    musicTitle.textContent=track.title || "Unknown track";
+    musicArtist.textContent=(track.user && track.user.name ? track.user.name : "Unknown artist")+" • Audius";
+    await audio.play();
+
+    addMessage("▶️ Muter sekarang: "+(track.title||"Unknown track")+" — "+(track.user?.name||"Unknown artist"),"assistant");
+    return true;
+  }catch(error){
+    addMessage("🎵 Music error: "+error.message,"assistant");
+    return false;
+  }
 }
 
-function tryMusicCommand(message){
+function musicPause(){ audio.pause(); }
+function musicResume(){ audio.play().catch(()=>{}); }
+function musicStop(){ audio.pause(); audio.currentTime=0; }
+
+async function tryMusicCommand(message){
+  const lower=message.trim().toLowerCase();
+
+  if(/^(pause|jeda|berhenti sebentar)$/.test(lower)){
+    musicPause();
+    addMessage("⏸️ Musik dipause.","assistant");
+    return true;
+  }
+
+  if(/^(lanjut|resume|continue|terusin)$/.test(lower)){
+    musicResume();
+    addMessage("▶️ Musik dilanjutkan.","assistant");
+    return true;
+  }
+
+  if(/^(stop|berhenti|matikan musik)$/.test(lower)){
+    musicStop();
+    addMessage("⏹️ Musik dihentikan.","assistant");
+    return true;
+  }
+
   const match=message.match(/^(?:putar|mainkan|play|cari(?:kan)? musik)\s+(.+)$/i);
   if(!match) return false;
 
   const query=match[1].trim();
-  addMessage("🎵 Mencari musik: "+query,"user");
-  addMessage("Gue buka pencarian musiknya di tab baru. Browser gratis, manusia bahagia, kapitalisme sedikit bingung.","assistant");
-  musicSearch(query);
+  addMessage("🎵 Mencari: "+query,"user");
+  await musicSearch(query);
   return true;
 }
 
@@ -175,7 +239,7 @@ async function sendMessage(message){
 
   stopSpeaking();
 
-  if(tryMusicCommand(message)){
+  if(await tryMusicCommand(message)){
     input.value="";
     return;
   }
@@ -269,11 +333,15 @@ document.querySelectorAll(".quick").forEach(button=>{
   button.addEventListener("click",()=>sendMessage(button.dataset.message));
 });
 
-document.getElementById("musicTest").addEventListener("click",()=>{
-  addMessage("🎵 Test musik","user");
-  addMessage("Gue buka pencarian musik gratis di YouTube. Tidak perlu API key musik dulu.","assistant");
-  musicSearch("lofi hip hop");
+document.getElementById("musicTest").addEventListener("click",async()=>{
+  stopSpeaking();
+  addMessage("🎵 Test musik: lofi hip hop","user");
+  await musicSearch("lofi hip hop");
 });
+
+document.getElementById("musicPause").addEventListener("click",musicPause);
+document.getElementById("musicResume").addEventListener("click",musicResume);
+document.getElementById("musicStop").addEventListener("click",musicStop);
 
 const SpeechRecognition=window.SpeechRecognition || window.webkitSpeechRecognition;
 
