@@ -48,7 +48,7 @@ user as "Sir" occasionally, not every sentence.
 
 You have access to a small set of local PC tools. Decide yourself when a tool is
 needed. Do not claim an action happened unless its tool result says it succeeded.
-After a tool runs, briefly explain the result to the user.
+After a tool runs, briefly explain the result to the user. Use only the exact tool names provided in the tool list. Never invent, modify, append channel labels to, or otherwise alter a tool name.
 
 Available capabilities include opening approved applications, websites, folders,
 and reading basic computer status.
@@ -246,6 +246,10 @@ def press_key(key: str) -> str:
 
 
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
+    # Some model/tool adapters can occasionally append an internal channel marker.
+    # Strip it before dispatching, but never execute arbitrary tool names.
+    if isinstance(name, str) and "<|channel|>" in name:
+        name = name.split("<|channel|>", 1)[0]
     if name == "open_app":
         return open_app(str(arguments["name"]))
     if name == "search_web":
@@ -320,7 +324,9 @@ def close_app(name: str) -> str:
     WM_CLOSE = 0x0010
     matches = []
 
-    @wintypes.BOOL
+    EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @EnumWindowsProc
     def enum_window(hwnd, _lparam):
         if not user32.IsWindowVisible(hwnd):
             return True
@@ -563,6 +569,8 @@ def try_direct_command(text: str) -> str | None:
         "task manager": "task manager",
     }
     close_target = normalized[6:].strip() if normalized.startswith("tutup ") else ""
+    if close_target.endswith("nya"):
+        close_target = close_target[:-3].strip()
     if close_target in close_aliases:
         app = close_aliases[close_target]
         result = close_app(app)
