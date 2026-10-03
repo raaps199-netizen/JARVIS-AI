@@ -770,7 +770,7 @@ def see_webcam(client: Groq, question: str) -> str:
             cap.release()
 
 
-def run_tool(name: str, arguments: dict[str, Any]) -> str:
+def run_tool(name: str, arguments: dict[str, Any], client: Groq | None = None) -> str:
     # Some model/tool adapters can occasionally append an internal channel marker.
     if isinstance(name, str) and "<|channel|>" in name:
         name = name.split("<|channel|>", 1)[0]
@@ -825,8 +825,12 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
     if name == "ui_inspect":
         return ui_inspect(str(arguments.get("window_title","")))
     if name == "see_screen":
+        if client is None:
+            return "Vision is unavailable without an active Groq client."
         return see_screen(client, str(arguments["question"]))
     if name == "see_webcam":
+        if client is None:
+            return "Vision is unavailable without an active Groq client."
         return see_webcam(client, str(arguments["question"]))
     if name == "scroll_mouse":
         return scroll_mouse(int(arguments["clicks"]))
@@ -1005,6 +1009,42 @@ def stop_jarvis() -> str:
 
 
 
+
+def _perform_confirmed_write(path: str, content: str) -> str:
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(content), encoding="utf-8")
+        return f"Updated {target} successfully."
+    except Exception as exc:
+        return f"Failed to overwrite {target}: {exc}"
+
+
+def _perform_confirmed_launch_application(name: str) -> str:
+    try:
+        pyautogui.hotkey("win", "s")
+        time.sleep(0.4)
+        pyperclip.copy(str(name))
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.4)
+        pyautogui.press("enter")
+        return f"Requested Windows Search to open {name}."
+    except Exception as exc:
+        return f"Failed to launch {name}: {exc}"
+
+
+def _perform_confirmed_hotkey(keys: str) -> str:
+    value = str(keys).lower().replace(" ", "")
+    parts = [p for p in value.split("+") if p]
+    if not parts:
+        return "The shortcut is empty."
+    try:
+        pyautogui.hotkey(*parts)
+        return f"Pressed {keys}."
+    except Exception as exc:
+        return f"Failed to press {keys}: {exc}"
+
+
 def request_confirmation(description: str) -> bool:
     callback = CONFIRMATION_CALLBACK
     if callback is not None:
@@ -1084,7 +1124,7 @@ def ask_agent(client: Groq, user_text: str) -> str:
                     if not approval:
                         result = "The user denied typing into the terminal."
                     else:
-                        result = run_tool(tool_name, arguments)
+                        result = run_tool(tool_name, arguments, client)
                 elif tool_name == "ui_click" and any(word in str(arguments.get("text", "")).lower() for word in RISKY_UI_WORDS):
                     approval = request_confirmation(
                         f"Click the potentially consequential control '{arguments.get('text')}'."
@@ -1106,6 +1146,15 @@ def ask_agent(client: Groq, user_text: str) -> str:
                             str(arguments["path"]),
                             bool(arguments.get("recursive", False)),
                         )
+                    elif tool_name == "write_file":
+                        result = _perform_confirmed_write(
+                            str(arguments["path"]),
+                            str(arguments["content"]),
+                        )
+                    elif tool_name == "launch_application":
+                        result = _perform_confirmed_launch_application(str(arguments["name"]))
+                    elif tool_name == "hotkey":
+                        result = _perform_confirmed_hotkey(str(arguments["keys"]))
                     elif tool_name == "move_path":
                         result = _perform_confirmed_move(
                             str(arguments["source"]),
