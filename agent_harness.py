@@ -1,7 +1,7 @@
 """JARVIS local desktop agent.
 
-Microphone -> Gemini speech-to-text/reasoning -> tool calling -> PC action -> voice.
-The PC tool set is intentionally allowlisted instead of exposing arbitrary shell access.
+Microphone -> Groq speech-to-text/reasoning -> tool calling -> PC action -> voice.
+Desktop control is broad, while high-impact actions require explicit voice approval.
 """
 from __future__ import annotations
 
@@ -29,14 +29,13 @@ from dotenv import load_dotenv
 from groq import Groq
 
 from jarvis_tts import speak
-from hermes_bridge import ask_hermes, hermes_available
 
 load_dotenv()
 
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
-HERMES_AGENT_ENABLED = os.getenv("HERMES_AGENT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+CONFIRMATION_CALLBACK = None
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
@@ -56,28 +55,40 @@ the user's request into Indonesian unless explicitly asked. Understand Indonesia
 commands normally and execute them as requested. Use natural English and address the
 user as "Sir" occasionally, not every sentence.
 
-You have access to a small set of local PC tools. Decide yourself when a tool is
-needed. Do not claim an action happened unless its tool result says it succeeded.
-After a tool runs, briefly explain the result to the user. Use only the exact tool names provided in the tool list. Never invent, modify, append channel labels to, or otherwise alter a tool name.
+You have broad control over the user's Windows desktop through the tools below.
+Decide yourself which tools and sequence are needed to complete the user's request.
+Actually perform the requested desktop work and verify the result when practical.
+Do not claim an action happened unless its tool result says it succeeded. Use only
+the exact tool names provided in the tool list.
 
-Available capabilities include opening approved applications, websites, folders,
-typing text, pressing safe keyboard shortcuts, interacting with visible Windows UI
-elements by their displayed text, scrolling, waiting for UI changes, and reading
-basic non-sensitive UI status. When the user asks to operate a desktop application,
-actually perform the requested UI steps instead of merely explaining them.
+You may open applications by name, open arbitrary URLs, open files and folders,
+inspect visible UI, click by text or coordinates, move and drag the mouse, scroll,
+type text, press keyboard shortcuts, read ordinary user files, create/edit/rename/
+move/delete files, and operate Microsoft Word deeply. You may chain many tool calls
+to complete a multi-step task.
 
 WORD HAS DEEP CONTROL: When Microsoft Word is active and the user asks to write,
 format, edit, select, style, align, change font/size, insert tables, read the
 current document, or save the document, use the Word tools below instead of
 pretending that generic typing is enough. You may use Word's COM automation to
 operate the active document and its selection. Preserve the user's intended
-content and do not perform destructive document operations unless explicitly
-requested.
+content.
 
-Do not invent access to files or system state. Do not execute destructive,
-credential-stealing, surveillance, financial, or otherwise dangerous actions.
-For actions that could delete data, shut down the machine, install unknown
-software, or change security settings, do not execute them automatically.
+HIGH-IMPACT ACTIONS: JARVIS will ask the user for approval immediately before
+destructive, irreversible, externally consequential, security-sensitive, or
+potentially dangerous actions. This includes deleting or overwriting data,
+moving/renaming data when it could cause loss, typing commands into a terminal,
+installing/uninstalling software, changing security settings, shutting down or
+restarting Windows, publishing/sending/purchasing, or clicking controls clearly
+labeled Delete, Remove, Reset, Format, Shutdown, Restart, Send, Publish, Buy,
+Purchase, Install, Uninstall, or similar. Do not try to bypass this approval.
+Normal desktop actions such as opening apps, browsing, reading ordinary files,
+typing into documents, and clicking ordinary UI controls do not require approval.
+
+Never retrieve passwords, authentication tokens, private keys, browser cookies,
+or other credential stores. Do not use the webcam unless the user explicitly
+asks. Treat the user's request as authorization for ordinary desktop work, but
+not as permission to bypass the approval step for high-impact actions.
 
 Keep spoken answers concise. If the user asks a normal knowledge question,
 answer it directly without calling a PC tool.
@@ -115,6 +126,21 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"open_folder","description":"Open a common user folder.","parameters":{"type":"object","properties":{"name":{"type":"string","enum":["home","desktop","documents","downloads"]}},"required":["name"]}}},
     {"type":"function","function":{"name":"type_text","description":"Type exact text into the currently focused desktop application when explicitly requested.","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}},
 
+    {"type":"function","function":{"name":"launch_application","description":"Open an installed Windows application by its visible name using Windows Search. Use this for applications not listed in open_app.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
+    {"type":"function","function":{"name":"open_url","description":"Open any user-requested URL in the default browser.","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}},
+    {"type":"function","function":{"name":"open_path","description":"Open an existing local file or folder in Windows Explorer. Do not use this for executables or scripts.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+    {"type":"function","function":{"name":"list_directory","description":"List ordinary files and folders in a user-accessible directory.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+    {"type":"function","function":{"name":"read_file","description":"Read an ordinary text file for the user. Never use this for password stores, browser cookies, private keys, authentication tokens, or other credential stores.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+    {"type":"function","function":{"name":"write_file","description":"Create or update a normal text file with exact content. Existing files require approval before overwrite.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
+    {"type":"function","function":{"name":"create_folder","description":"Create a directory if it does not already exist.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+    {"type":"function","function":{"name":"rename_path","description":"Rename an existing file or folder.","parameters":{"type":"object","properties":{"path":{"type":"string"},"new_name":{"type":"string"}},"required":["path","new_name"]}}},
+    {"type":"function","function":{"name":"move_path","description":"Move an existing file or folder to another directory.","parameters":{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}}},
+    {"type":"function","function":{"name":"delete_path","description":"Delete a file or folder only after JARVIS obtains explicit user approval.","parameters":{"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}},"required":["path"]}}},
+    {"type":"function","function":{"name":"click_at","description":"Click a screen coordinate.","parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"button":{"type":"string","enum":["left","right","middle"]}},"required":["x","y"]}}},
+    {"type":"function","function":{"name":"double_click_at","description":"Double-click a screen coordinate.","parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"button":{"type":"string","enum":["left","right","middle"]}},"required":["x","y"]}}},
+    {"type":"function","function":{"name":"move_mouse","description":"Move the mouse to a screen coordinate without clicking.","parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}}},
+    {"type":"function","function":{"name":"drag_mouse","description":"Drag the mouse from one screen coordinate to another.","parameters":{"type":"object","properties":{"start_x":{"type":"integer"},"start_y":{"type":"integer"},"end_x":{"type":"integer"},"end_y":{"type":"integer"},"duration":{"type":"number"}},"required":["start_x","start_y","end_x","end_y"]}}},
+    {"type":"function","function":{"name":"hotkey","description":"Press a keyboard shortcut. Use normal shortcuts freely; high-impact system shortcuts may require approval.","parameters":{"type":"object","properties":{"keys":{"type":"string"}},"required":["keys"]}}},
     {"type":"function","function":{"name":"word_control","description":"Deeply control Microsoft Word through its active document. Use for Word-specific writing, formatting, editing, selection, alignment, styles, font size, tables, reading document text, and saving. Actions: new_document, write, format_selection, select_all, insert_table, replace_text, read_document, save, save_as.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["new_document","write","format_selection","select_all","insert_table","replace_text","read_document","save","save_as"]},"text":{"type":"string"},"replacement":{"type":"string"},"font_size":{"type":"number"},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"underline":{"type":"boolean"},"alignment":{"type":"string","enum":["left","center","right","justify"]},"style":{"type":"string"},"rows":{"type":"integer"},"columns":{"type":"integer"},"path":{"type":"string"}},"required":["action"]}}},
 
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
@@ -132,6 +158,16 @@ TOOL_DECLARATIONS = [
 ]
 
 TOOLS = TOOL_DECLARATIONS
+
+RISKY_UI_WORDS = {
+    "delete", "remove", "reset", "format", "shutdown", "restart", "reboot",
+    "send", "publish", "post", "buy", "purchase", "pay", "install",
+    "uninstall", "factory reset", "sign out", "log out", "wipe", "erase",
+}
+TERMINAL_PROCESSES = {
+    "cmd.exe", "powershell.exe", "pwsh.exe", "wt.exe", "windowsterminal.exe",
+    "bash.exe", "wsl.exe", "ubuntu.exe", "debian.exe", "mintty.exe",
+}
 
 
 def open_app(name: str) -> str:
@@ -187,6 +223,218 @@ def pc_status() -> str:
         f"Python: {platform.python_version()}; "
         f"ruang kosong: {free_gb:.1f} GB."
     )
+
+
+
+def launch_application(name: str) -> str:
+    name = str(name).strip()
+    if not name:
+        return "The application name is empty."
+    risky_names = {"powershell", "windows terminal", "command prompt", "cmd", "terminal", "wsl"}
+    if name.lower() in risky_names:
+        return "__RISKY_ACTION__:Open the terminal application '{}'. This can execute system commands.".format(name)
+    try:
+        pyautogui.hotkey("win", "s")
+        time.sleep(0.4)
+        pyperclip.copy(name)
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.4)
+        pyautogui.press("enter")
+        return f"Requested Windows Search to open {name}."
+    except Exception as exc:
+        return f"Failed to launch {name}: {exc}"
+
+
+def open_url(url: str) -> str:
+    url = str(url).strip()
+    if not url:
+        return "The URL is empty."
+    try:
+        opened = webbrowser.open(url, new=2)
+        return f"Opened {url}." if opened else "The browser refused to open the URL."
+    except Exception as exc:
+        return f"Failed to open URL: {exc}"
+
+
+def open_path(path: str) -> str:
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    if not target.exists():
+        return f"The path was not found: {target}"
+    if target.suffix.lower() in {".exe", ".bat", ".cmd", ".com", ".ps1", ".vbs", ".js"}:
+        return f"Executable or script paths are not opened by open_path: {target}"
+    try:
+        os.startfile(str(target))
+        return f"Opened {target}."
+    except Exception as exc:
+        return f"Failed to open {target}: {exc}"
+
+
+def list_directory(path: str) -> str:
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    if not target.exists() or not target.is_dir():
+        return f"Directory not found: {target}"
+    try:
+        entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        lines = []
+        for item in entries[:200]:
+            kind = "DIR " if item.is_dir() else "FILE"
+            lines.append(f"{kind} {item.name}")
+        return "\n".join(lines) if lines else "The directory is empty."
+    except Exception as exc:
+        return f"Failed to list {target}: {exc}"
+
+
+def read_file(path: str) -> str:
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    lower = str(target).lower()
+    blocked_tokens = ("\\login data", "\\cookies", "\\web data", "\\local state", ".pem", ".key", ".p12", ".pfx")
+    if any(token in lower for token in blocked_tokens):
+        return "For safety, JARVIS will not read credential stores, browser secret databases, or private-key files."
+    if not target.exists() or not target.is_file():
+        return f"File not found: {target}"
+    try:
+        size = target.stat().st_size
+        if size > 2_000_000:
+            return "The file is too large to read through this tool."
+        content = target.read_text(encoding="utf-8", errors="replace")
+        return content[:30000] if content else "The file is empty."
+    except Exception as exc:
+        return f"Failed to read {target}: {exc}"
+
+
+def write_file(path: str, content: str) -> str:
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    if target.exists():
+        return f"__RISKY_ACTION__:Overwrite the existing file {target}."
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(content), encoding="utf-8")
+        return f"Created {target} successfully."
+    except Exception as exc:
+        return f"Failed to write {target}: {exc}"
+
+
+def create_folder(path: str) -> str:
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        return f"Created folder {target} successfully."
+    except Exception as exc:
+        return f"Failed to create folder {target}: {exc}"
+
+
+def rename_path(path: str, new_name: str) -> str:
+    source = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    if not source.exists():
+        return f"Path not found: {source}"
+    target = source.parent / str(new_name).strip()
+    return f"__RISKY_ACTION__:Rename {source} to {target}."
+
+
+def move_path(source: str, destination: str) -> str:
+    src = Path(os.path.expandvars(os.path.expanduser(str(source).strip()))).resolve()
+    dst = Path(os.path.expandvars(os.path.expanduser(str(destination).strip()))).resolve()
+    if not src.exists():
+        return f"Source path not found: {src}"
+    return f"__RISKY_ACTION__:Move {src} to {dst}."
+
+
+def _perform_confirmed_rename(source: str, new_name: str) -> str:
+    src = Path(os.path.expandvars(os.path.expanduser(str(source).strip()))).resolve()
+    dst = src.parent / str(new_name).strip()
+    if dst.exists():
+        return f"Destination already exists: {dst}"
+    try:
+        src.rename(dst)
+        return f"Renamed {src} to {dst}."
+    except Exception as exc:
+        return f"Failed to rename {src}: {exc}"
+
+
+def _perform_confirmed_move(source: str, destination: str) -> str:
+    import shutil as _shutil
+    src = Path(os.path.expandvars(os.path.expanduser(str(source).strip()))).resolve()
+    dst = Path(os.path.expandvars(os.path.expanduser(str(destination).strip()))).resolve()
+    try:
+        final = dst / src.name if dst.exists() and dst.is_dir() else dst
+        _shutil.move(str(src), str(final))
+        return f"Moved {src} to {final}."
+    except Exception as exc:
+        return f"Failed to move {src}: {exc}"
+
+
+def delete_path(path: str, recursive: bool = False) -> str:
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    if not target.exists():
+        return f"Path not found: {target}"
+    return f"__RISKY_ACTION__:Delete {target}{' recursively' if recursive else ''}."
+
+
+def _perform_confirmed_delete(path: str, recursive: bool = False) -> str:
+    import shutil as _shutil
+    target = Path(os.path.expandvars(os.path.expanduser(str(path).strip()))).resolve()
+    if not target.exists():
+        return f"Path not found: {target}"
+    try:
+        if target.is_dir():
+            if not recursive and any(target.iterdir()):
+                return f"Directory is not empty: {target}. Set recursive=true only when the user explicitly requested recursive deletion."
+            _shutil.rmtree(target) if recursive else target.rmdir()
+        else:
+            target.unlink()
+        return f"Deleted {target}."
+    except Exception as exc:
+        return f"Failed to delete {target}: {exc}"
+
+
+def click_at(x: int, y: int, button: str = "left") -> str:
+    pyautogui.click(int(x), int(y), button=str(button))
+    return f"Clicked {button} at ({int(x)}, {int(y)})."
+
+
+def double_click_at(x: int, y: int, button: str = "left") -> str:
+    pyautogui.doubleClick(int(x), int(y), button=str(button), interval=0.1)
+    return f"Double-clicked {button} at ({int(x)}, {int(y)})."
+
+
+def move_mouse(x: int, y: int) -> str:
+    pyautogui.moveTo(int(x), int(y), duration=0.15)
+    return f"Moved mouse to ({int(x)}, {int(y)})."
+
+
+def drag_mouse(start_x: int, start_y: int, end_x: int, end_y: int, duration: float = 0.5) -> str:
+    pyautogui.moveTo(int(start_x), int(start_y), duration=0.1)
+    pyautogui.dragTo(int(end_x), int(end_y), duration=max(0.1, min(5.0, float(duration))), button="left")
+    return f"Dragged from ({int(start_x)}, {int(start_y)}) to ({int(end_x)}, {int(end_y)})."
+
+
+def hotkey(keys: str) -> str:
+    value = str(keys).lower().replace(" ", "")
+    risky = {"ctrl+alt+delete", "win+l", "alt+f4"}
+    if value in risky:
+        return f"__RISKY_ACTION__:Press the system shortcut {keys}."
+    parts = [p for p in value.split("+") if p]
+    if not parts:
+        return "The shortcut is empty."
+    try:
+        pyautogui.hotkey(*parts)
+        return f"Pressed {keys}."
+    except Exception as exc:
+        return f"Failed to press {keys}: {exc}"
+
+
+def _foreground_process_name() -> str:
+    if os.name != "nt":
+        return ""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    hwnd = user32.GetForegroundWindow()
+    return _windows_process_name_from_hwnd(int(hwnd)) if hwnd else ""
+
+
+def _terminal_is_foreground() -> bool:
+    return _foreground_process_name() in TERMINAL_PROCESSES
 
 
 def _get_word_app():
@@ -524,17 +772,37 @@ def see_webcam(client: Groq, question: str) -> str:
 
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
     # Some model/tool adapters can occasionally append an internal channel marker.
-    # Strip it before dispatching, but never execute arbitrary tool names.
     if isinstance(name, str) and "<|channel|>" in name:
         name = name.split("<|channel|>", 1)[0]
+
     if name == "open_app":
         return open_app(str(arguments["name"]))
-    if name == "search_web":
-        return search_web(str(arguments["query"]))
+    if name == "launch_application":
+        return launch_application(str(arguments["name"]))
+    if name == "open_url":
+        return open_url(str(arguments["url"]))
     if name == "open_site":
         return open_site(str(arguments["name"]))
     if name == "open_folder":
         return open_folder(str(arguments["name"]))
+    if name == "open_path":
+        return open_path(str(arguments["path"]))
+    if name == "list_directory":
+        return list_directory(str(arguments["path"]))
+    if name == "read_file":
+        return read_file(str(arguments["path"]))
+    if name == "write_file":
+        return write_file(str(arguments["path"]), str(arguments["content"]))
+    if name == "create_folder":
+        return create_folder(str(arguments["path"]))
+    if name == "rename_path":
+        return rename_path(str(arguments["path"]), str(arguments["new_name"]))
+    if name == "move_path":
+        return move_path(str(arguments["source"]), str(arguments["destination"]))
+    if name == "delete_path":
+        return delete_path(str(arguments["path"]), bool(arguments.get("recursive", False)))
+    if name == "search_web":
+        return search_web(str(arguments["query"]))
     if name == "type_text":
         return type_text(str(arguments["text"]))
     if name == "word_control":
@@ -552,14 +820,36 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
             int(arguments.get("columns", 0) or 0),
             str(arguments.get("path", "")),
         )
-    if name == "ui_click": return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
-    if name == "ui_inspect": return ui_inspect(str(arguments.get("window_title","")))
-    if name == "see_screen": return see_screen(client, str(arguments["question"]))
-    if name == "see_webcam": return see_webcam(client, str(arguments["question"]))
-    if name == "scroll_mouse": return scroll_mouse(int(arguments["clicks"]))
-    if name == "wait_seconds": return wait_seconds(float(arguments["seconds"]))
+    if name == "ui_click":
+        return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
+    if name == "ui_inspect":
+        return ui_inspect(str(arguments.get("window_title","")))
+    if name == "see_screen":
+        return see_screen(client, str(arguments["question"]))
+    if name == "see_webcam":
+        return see_webcam(client, str(arguments["question"]))
+    if name == "scroll_mouse":
+        return scroll_mouse(int(arguments["clicks"]))
+    if name == "wait_seconds":
+        return wait_seconds(float(arguments["seconds"]))
     if name == "press_key":
         return press_key(str(arguments["key"]))
+    if name == "hotkey":
+        return hotkey(str(arguments["keys"]))
+    if name == "click_at":
+        return click_at(int(arguments["x"]), int(arguments["y"]), str(arguments.get("button", "left")))
+    if name == "double_click_at":
+        return double_click_at(int(arguments["x"]), int(arguments["y"]), str(arguments.get("button", "left")))
+    if name == "move_mouse":
+        return move_mouse(int(arguments["x"]), int(arguments["y"]))
+    if name == "drag_mouse":
+        return drag_mouse(
+            int(arguments["start_x"]),
+            int(arguments["start_y"]),
+            int(arguments["end_x"]),
+            int(arguments["end_y"]),
+            float(arguments.get("duration", 0.5)),
+        )
     if name == "pc_status":
         return pc_status()
     if name == "close_active_window":
@@ -568,9 +858,7 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
         return close_app(str(arguments["name"]))
     if name == "stop_jarvis":
         return stop_jarvis()
-    return f"Tool {name} tidak dikenal."
-
-
+    return f"Tool {name} is not recognized."
 def _windows_process_name_from_hwnd(hwnd: int) -> str:
     """Return the executable name owning a top-level window, if available."""
     if os.name != "nt":
@@ -716,13 +1004,24 @@ def stop_jarvis() -> str:
     return "__JARVIS_STOP__"
 
 
-def ask_agent(client: Groq, user_text: str) -> str:
-    if HERMES_AGENT_ENABLED and hermes_available():
-        hermes_reply = ask_hermes(user_text)
-        if hermes_reply:
-            print(f"[HERMES] {hermes_reply}")
-            return hermes_reply
 
+def request_confirmation(description: str) -> bool:
+    callback = CONFIRMATION_CALLBACK
+    if callback is not None:
+        try:
+            return bool(callback(description))
+        except Exception as exc:
+            print(f"[CONFIRM] callback failed: {exc}")
+            return False
+
+    try:
+        answer = input(f"[CONFIRM] {description} (yes/no): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in {"y", "yes", "approve", "approved", "iya", "ya", "lanjut", "boleh"}
+
+
+def ask_agent(client: Groq, user_text: str) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_text},
@@ -775,8 +1074,50 @@ def ask_agent(client: Groq, user_text: str) -> str:
 
         for tool_call in message.tool_calls:
             try:
+                tool_name = tool_call.function.name
                 arguments = json.loads(tool_call.function.arguments or "{}")
-                result = run_tool(tool_call.function.name, arguments)
+
+                if tool_name == "type_text" and _terminal_is_foreground():
+                    approval = request_confirmation(
+                        f"Type the requested text into the active terminal window. This may execute commands or alter system state."
+                    )
+                    if not approval:
+                        result = "The user denied typing into the terminal."
+                    else:
+                        result = run_tool(tool_name, arguments)
+                elif tool_name == "ui_click" and any(word in str(arguments.get("text", "")).lower() for word in RISKY_UI_WORDS):
+                    approval = request_confirmation(
+                        f"Click the potentially consequential control '{arguments.get('text')}'."
+                    )
+                    if not approval:
+                        result = "The user denied this consequential UI action."
+                    else:
+                        result = run_tool(tool_name, arguments)
+                else:
+                    result = run_tool(tool_name, arguments)
+
+                if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):
+                    description = result.split(":", 1)[1].strip()
+                    approval = request_confirmation(description)
+                    if not approval:
+                        result = "The user denied the high-impact action."
+                    elif tool_name == "delete_path":
+                        result = _perform_confirmed_delete(
+                            str(arguments["path"]),
+                            bool(arguments.get("recursive", False)),
+                        )
+                    elif tool_name == "move_path":
+                        result = _perform_confirmed_move(
+                            str(arguments["source"]),
+                            str(arguments["destination"]),
+                        )
+                    elif tool_name == "rename_path":
+                        result = _perform_confirmed_rename(
+                            str(arguments["path"]),
+                            str(arguments["new_name"]),
+                        )
+                    else:
+                        result = f"Approved high-impact action, but no executor is registered for {tool_name}."
             except Exception as exc:
                 result = f"Tool error: {exc}"
 
@@ -1048,12 +1389,46 @@ def transcribe(client: Groq, path: Path) -> str:
         return ""
 
 
+
+def confirm_action_via_voice(client: Groq, description: str) -> bool:
+    prompt_path = Path(__file__).resolve().with_name(".jarvis_confirm.wav")
+    speak(
+        f"This is a high-impact action: {description}. "
+        "Please say yes to proceed or no to cancel."
+    )
+    try:
+        record_audio(prompt_path)
+        answer = transcribe(client, prompt_path).lower().strip()
+    except Exception as exc:
+        print(f"[CONFIRM] Voice confirmation failed: {exc}")
+        return False
+    finally:
+        try:
+            prompt_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    normalized = " ".join(answer.split())
+    yes = {"yes", "yeah", "yep", "approve", "approved", "do it", "go ahead", "iya", "ya", "boleh", "lanjut", "jalankan"}
+    no = {"no", "nope", "cancel", "deny", "denied", "jangan", "tidak", "nggak", "enggak", "batal", "stop"}
+    if normalized in yes or normalized.startswith(tuple(f"{item} " for item in yes)):
+        print("[CONFIRM] User approved.")
+        return True
+    if normalized in no or normalized.startswith(tuple(f"{item} " for item in no)):
+        print("[CONFIRM] User denied.")
+        return False
+    speak("I did not get a clear yes or no, Sir. I cancelled the action.")
+    return False
+
+
 def main() -> None:
     if not GROQ_API_KEY:
         print("GROQ_API_KEY belum diatur.")
         return
 
     client = Groq(api_key=GROQ_API_KEY)
+    global CONFIRMATION_CALLBACK
+    CONFIRMATION_CALLBACK = lambda description: confirm_action_via_voice(client, description)
     speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
 
