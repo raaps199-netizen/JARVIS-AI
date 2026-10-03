@@ -610,18 +610,21 @@ if(SpeechRecognition){
   };
 
   recognition.onresult=event=>{
+    // Rebuild the transcript from the browser's current result list instead of
+    // appending each event. Some browsers resend revised/final segments, which
+    // otherwise makes words appear repeatedly ("Jarvis, Jarvis, tolong...").
+    let finalText="";
     let interim="";
-    for(let i=event.resultIndex;i<event.results.length;i++){
+    for(let i=0;i<event.results.length;i++){
       const result=event.results[i];
-      if(result.isFinal) voiceTranscript += result[0].transcript+" ";
+      if(result.isFinal) finalText += result[0].transcript+" ";
       else interim += result[0].transcript;
     }
-    input.value=(voiceTranscript+" "+interim).trim();
+    voiceTranscript=finalText;
+    input.value=(finalText+" "+interim).trim();
 
-    // Debounce setiap hasil, termasuk interim. Jangan potong kalimat di jeda
-    // pendek antar kata; tunggu sampai pengguna benar-benar selesai bicara.
     clearTimeout(voicePauseTimer);
-    if(voiceTranscript.trim() || interim.trim()){
+    if(finalText.trim() || interim.trim()){
       voicePauseTimer=setTimeout(()=>{
         if(!voiceMode || voiceRequestBusy) return;
         voiceFinalizePending=true;
