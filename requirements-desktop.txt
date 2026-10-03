@@ -4,3 +4,5 @@ sounddevice
 SpeechRecognition
 pyttsx3
 PySide6
+pyautogui
+pyperclip
