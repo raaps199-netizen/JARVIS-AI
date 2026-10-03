@@ -33,10 +33,11 @@ def _elevenlabs_speak(text: str) -> bool:
     payload = json.dumps({
         "text": text,
         "model_id": ELEVENLABS_MODEL,
+        "language_code": "id",
         "voice_settings": {
             "stability": 0.48,
             "similarity_boost": 0.78,
-            "style": 0.20,
+            "style": 0.10,
             "use_speaker_boost": True,
         },
     }).encode("utf-8")
@@ -59,7 +60,14 @@ def _elevenlabs_speak(text: str) -> bool:
         with sd.RawOutputStream(samplerate=44100, channels=1, dtype="int16") as stream:
             stream.write(pcm)
         return True
-    except (HTTPError, URLError, OSError, sd.PortAudioError) as exc:
+    except HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(exc)
+        print(f"[TTS] ElevenLabs gagal ({exc.code}): {detail[:500]}")
+        return False
+    except (URLError, OSError, sd.PortAudioError) as exc:
         print(f"[TTS] ElevenLabs gagal, fallback ke suara lokal: {exc}")
         return False
 
