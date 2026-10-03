@@ -122,6 +122,66 @@ def status():
     })
 
 
+@app.post("/api/music/youtube-search")
+def youtube_search():
+    api_key = os.getenv("YOUTUBE_API_KEY")
+    if not api_key:
+        return jsonify({
+            "error": "YOUTUBE_API_KEY belum diatur di environment variables."
+        }), 503
+
+    data = request.get_json(silent=True) or {}
+    query = str(data.get("query", "")).strip()
+    if not query:
+        return jsonify({"error": "Judul lagu kosong."}), 400
+
+    from urllib.parse import urlencode
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    params = urlencode({
+        "part": "snippet",
+        "type": "video",
+        "videoCategoryId": "10",
+        "q": query,
+        "maxResults": 5,
+        "order": "relevance",
+        "videoEmbeddable": "true",
+        "videoSyndicated": "true",
+        "safeSearch": "strict",
+        "key": api_key,
+    })
+    url = "https://www.googleapis.com/youtube/v3/search?" + params
+    req = Request(url, headers={"Accept": "application/json"})
+
+    try:
+        with urlopen(req, timeout=8) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        detail = "YouTube Data API menolak permintaan."
+        try:
+            body = json.loads(error.read().decode("utf-8"))
+            detail = body.get("error", {}).get("message", detail)
+        except Exception:
+            pass
+        return jsonify({"error": detail}), 502
+    except (URLError, TimeoutError) as error:
+        return jsonify({"error": "Gagal menghubungi YouTube: " + str(error)}), 502
+
+    videos = []
+    for item in result.get("items", []):
+        video_id = item.get("id", {}).get("videoId")
+        snippet = item.get("snippet", {})
+        if video_id:
+            videos.append({
+                "id": video_id,
+                "title": snippet.get("title", "Untitled"),
+                "channel": snippet.get("channelTitle", "YouTube"),
+            })
+
+    return jsonify({"items": videos})
+
+
 @app.post("/api/chat")
 def chat():
     global client, startup_error
