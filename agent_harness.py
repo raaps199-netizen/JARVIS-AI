@@ -1,6 +1,6 @@
 """JARVIS local desktop agent.
 
-Microphone -> Groq speech-to-text/reasoning -> tool calling -> PC action -> voice.
+Microphone -> Groq speech-to-text -> local Ollama reasoning/vision -> tool calling -> PC action -> voice.
 Desktop control is broad, while high-impact actions require explicit voice approval.
 """
 from __future__ import annotations
@@ -28,14 +28,18 @@ import sounddevice as sd
 import speech_recognition as sr
 from dotenv import load_dotenv
 from groq import Groq
+from openai import OpenAI
 
 from jarvis_tts import speak
 
 load_dotenv()
 
-MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "ollama").strip().lower()
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b").strip()
+MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
-VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 TEXT_MODE = "--text" in sys.argv or os.getenv("JARVIS_TEXT_MODE", "").lower() in {"1", "true", "yes", "on"}
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -46,6 +50,23 @@ SILENCE_SECONDS = 1.5
 UI_DELAY_SECONDS = 0.8
 START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
+
+def build_llm_client():
+    """Create the configured reasoning/vision client."""
+    if LLM_PROVIDER == "ollama":
+        return OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL)
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY belum diatur.")
+    return Groq(api_key=GROQ_API_KEY)
+
+
+def chat_create(client: Any, **kwargs):
+    """Call the active chat backend and disable Qwen thinking for fast commands."""
+    if LLM_PROVIDER == "ollama":
+        extra_body = dict(kwargs.pop("extra_body", {}) or {})
+        extra_body["think"] = False
+        kwargs["extra_body"] = extra_body
+    return chat_create(client, **kwargs)
 
 
 SYSTEM_PROMPT = """
@@ -191,7 +212,7 @@ def open_app(name: str) -> str:
         return f"Failed to open {name}: {exc}"
 
 
-def browser_search(client: Groq, query: str) -> str:
+def browser_search(client: Any, query: str) -> str:
     query = str(query).strip()
     if not query:
         return "The browser search query is empty."
@@ -209,7 +230,7 @@ def browser_search(client: Groq, query: str) -> str:
             f"using original screenshot pixels x=0..{width-1}, y=0..{height-1}. "
             "If no clear webpage search field is visible, return x=-1, y=-1, confidence=0."
         )
-        response = client.chat.completions.create(
+        response = chat_create(client, 
             model=VISION_MODEL,
             messages=[{"role":"user","content":[
                 {"type":"text","text":locator_prompt},
@@ -785,7 +806,7 @@ def wait_seconds(seconds:float) -> str:
     except Exception as exc: return f"Gagal menunggu: {exc}"
 
 
-def _locate_visual_target(client: Groq, image_bytes: bytes, target: str, width: int, height: int) -> tuple[int, int, str]:
+def _locate_visual_target(client: Any, image_bytes: bytes, target: str, width: int, height: int) -> tuple[int, int, str]:
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
         "You are locating one visible desktop UI target on a screenshot.\n"
@@ -799,7 +820,7 @@ def _locate_visual_target(client: Groq, image_bytes: bytes, target: str, width: 
         "If the target is not clearly visible, return x=-1, y=-1, confidence=0.\n"
         "Return no markdown and no extra text."
     )
-    response = client.chat.completions.create(
+    response = chat_create(client, 
         model=VISION_MODEL,
         messages=[{"role":"user","content":[
             {"type":"text","text":prompt},
@@ -823,7 +844,7 @@ def _locate_visual_target(client: Groq, image_bytes: bytes, target: str, width: 
     return x, y, reason
 
 
-def visual_click(client: Groq, target: str, button: str = "left") -> str:
+def visual_click(client: Any, target: str, button: str = "left") -> str:
     target = str(target).strip()
     if not target:
         return "The visual target is empty."
@@ -840,9 +861,9 @@ def visual_click(client: Groq, target: str, button: str = "left") -> str:
         return f"Failed to visually locate/click '{target}': {exc}"
 
 
-def _vision_answer(client: Groq, image_bytes: bytes, question: str, source: str) -> str:
+def _vision_answer(client: Any, image_bytes: bytes, question: str, source: str) -> str:
     encoded=base64.b64encode(image_bytes).decode("utf-8")
-    response=client.chat.completions.create(
+    response=chat_create(client, 
         model=VISION_MODEL,
         messages=[{
             "role":"user",
@@ -857,7 +878,7 @@ def _vision_answer(client: Groq, image_bytes: bytes, question: str, source: str)
     return (response.choices[0].message.content or "").strip()
 
 
-def see_screen(client: Groq, question: str) -> str:
+def see_screen(client: Any, question: str) -> str:
     try:
         shot=pyautogui.screenshot()
         from io import BytesIO
@@ -868,7 +889,7 @@ def see_screen(client: Groq, question: str) -> str:
         return f"Gagal melihat layar: {exc}"
 
 
-def see_webcam(client: Groq, question: str) -> str:
+def see_webcam(client: Any, question: str) -> str:
     cap=None
     try:
         cap=cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -888,7 +909,7 @@ def see_webcam(client: Groq, question: str) -> str:
             cap.release()
 
 
-def run_tool(name: str, arguments: dict[str, Any], client: Groq | None = None) -> str:
+def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) -> str:
     # Some model/tool adapters can occasionally append an internal channel marker.
     if isinstance(name, str) and "<|channel|>" in name:
         name = name.split("<|channel|>", 1)[0]
@@ -1187,7 +1208,7 @@ def request_confirmation(description: str) -> bool:
     return answer in {"y", "yes", "approve", "approved", "iya", "ya", "lanjut", "boleh"}
 
 
-def ask_agent(client: Groq, user_text: str) -> str:
+def ask_agent(client: Any, user_text: str) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_text},
@@ -1224,7 +1245,7 @@ def ask_agent(client: Groq, user_text: str) -> str:
                 return result
 
     for _ in range(6):
-        response = client.chat.completions.create(
+        response = chat_create(client, 
             model=MODEL,
             messages=messages,
             tools=TOOLS,
@@ -1241,7 +1262,8 @@ def ask_agent(client: Groq, user_text: str) -> str:
         for tool_call in message.tool_calls:
             try:
                 tool_name = tool_call.function.name
-                arguments = json.loads(tool_call.function.arguments or "{}")
+                raw_arguments = tool_call.function.arguments or "{}"
+                arguments = raw_arguments if isinstance(raw_arguments, dict) else json.loads(raw_arguments)
 
                 if tool_name == "type_text" and _terminal_is_foreground():
                     approval = request_confirmation(
@@ -1365,7 +1387,7 @@ def record_audio(path: Path) -> None:
         wav.writeframes(recording.tobytes())
 
 
-def try_direct_command(text: str, client: Groq | None = None) -> str | None:
+def try_direct_command(text: str, client: Any | None = None) -> str | None:
     normalized = " ".join(text.lower().strip().split())
     # Whisper/Groq can mishear "Jarvis" as "Jervis", "Yervis", or "Surface".
     # Treat these common wake-name variants as the same command prefix.
@@ -1662,7 +1684,7 @@ def try_direct_command(text: str, client: Groq | None = None) -> str | None:
     return None
 
 
-def transcribe(client: Groq, path: Path) -> str:
+def transcribe(client: Any, path: Path) -> str:
     try:
         with open(path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
@@ -1693,7 +1715,7 @@ def confirm_action_via_text(description: str) -> bool:
     return normalized in yes or normalized.startswith(tuple(f"{item} " for item in yes))
 
 
-def confirm_action_via_voice(client: Groq, description: str) -> bool:
+def confirm_action_via_voice(client: Any, description: str) -> bool:
     prompt_path = Path(__file__).resolve().with_name(".jarvis_confirm.wav")
     speak(
         f"This is a high-impact action: {description}. "
@@ -1725,22 +1747,31 @@ def confirm_action_via_voice(client: Groq, description: str) -> bool:
 
 
 def main() -> None:
-    if not GROQ_API_KEY:
-        print("GROQ_API_KEY belum diatur.")
+    try:
+        llm_client = build_llm_client()
+    except RuntimeError as exc:
+        print(str(exc))
         return
 
-    client = Groq(api_key=GROQ_API_KEY)
+    stt_client = None
+    if not TEXT_MODE:
+        if not GROQ_API_KEY:
+            print("GROQ_API_KEY belum diatur. Voice mode saat ini memakai Groq hanya untuk STT.")
+            return
+        stt_client = Groq(api_key=GROQ_API_KEY)
+
     global CONFIRMATION_CALLBACK
     CONFIRMATION_CALLBACK = (
         (lambda description: confirm_action_via_text(description))
         if TEXT_MODE
-        else (lambda description: confirm_action_via_voice(client, description))
+        else (lambda description: confirm_action_via_voice(stt_client, description))
     )
     if not TEXT_MODE:
         speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
 
     if TEXT_MODE:
+        print(f"JARVIS text mode online, Sir. LLM: {LLM_PROVIDER}/{MODEL}")
         print("JARVIS text mode online, Sir. Type commands; use /exit to quit.")
         try:
             while True:
@@ -1769,7 +1800,7 @@ def main() -> None:
                     print("JARVIS: Understood, Sir. Shutting down the JARVIS system.")
                     break
 
-                direct_reply = try_direct_command(heard, client)
+                direct_reply = try_direct_command(heard, llm_client)
                 if direct_reply is not None:
                     if direct_reply == "__JARVIS_STOP__":
                         print("[JARVIS] Text mode stopped.")
@@ -1778,7 +1809,7 @@ def main() -> None:
                     continue
 
                 try:
-                    reply = ask_agent(client, heard)
+                    reply = ask_agent(llm_client, heard)
                     if reply == "__JARVIS_STOP__":
                         print("[JARVIS] Text mode stopped.")
                         break
@@ -1797,7 +1828,7 @@ def main() -> None:
         while True:
             try:
                 record_audio(audio_path)
-                heard = transcribe(client, audio_path)
+                heard = transcribe(stt_client, audio_path)
             except (OSError, sd.PortAudioError) as exc:
                 print(f"[MIC] {exc}")
                 speak("I cannot access the microphone. Please check your Windows audio device.")
@@ -1858,7 +1889,7 @@ def main() -> None:
                 speak("Understood, Sir. Shutting down the JARVIS system.")
                 return
 
-            direct_reply = try_direct_command(heard, client)
+            direct_reply = try_direct_command(heard, llm_client)
             if direct_reply is not None:
                 if direct_reply == "__JARVIS_STOP__":
                     print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
@@ -1868,7 +1899,7 @@ def main() -> None:
                 continue
 
             try:
-                reply = ask_agent(client, heard)
+                reply = ask_agent(llm_client, heard)
                 if reply == "__JARVIS_STOP__":
                     speak("Understood, Sir. Shutting down the JARVIS system.")
                     break
