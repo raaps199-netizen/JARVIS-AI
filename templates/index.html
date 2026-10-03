@@ -43,11 +43,12 @@
     <button class="quick" data-message="Halo Jarvis">👋 Halo Jarvis</button>
     <button class="quick" data-message="Jelaskan status prototype kita sekarang.">📊 Status prototype</button>
     <button class="quick" data-message="Bantu gue merencanakan fitur berikutnya untuk Jarvis.">🧠 Rencanakan fitur</button>
-    <div class="side-title">Current stage</div><div class="label">Stage 1.5</div><div class="value">Web → Voice → AI</div>
-    <div class="hint">STT + TTS browser aktif. Tidak memakai API voice OpenAI.</div>
+    <button class="quick" id="musicTest" type="button">🎵 Test musik</button>
+    <div class="side-title">Current stage</div><div class="label">Stage 2</div><div class="value">Streaming → Voice → Music</div>
+    <div class="hint">STT + streaming AI + browser TTS aktif. Voice API OpenAI tidak dipakai.</div>
   </aside>
   <main class="panel">
-    <header><div><h2>JARVIS Console</h2><span>Voice + text control</span></div><span>API</span></header>
+    <header><div><h2>JARVIS Console</h2><span>Realtime-ish voice + streaming AI</span></div><span>STREAM</span></header>
     <section id="chat"><div class="msg assistant"><div class="bubble">JARVIS online. Dashboard siap menerima teks atau suara.</div></div></section>
     <div class="composer">
       <form id="form">
@@ -72,6 +73,9 @@ const hint=document.getElementById("hint");
 let recognition=null;
 let isListening=false;
 let finalTranscript="";
+let speechQueue=[];
+let isSpeaking=false;
+let speechBuffer="";
 
 function addMessage(text,role){
   const row=document.createElement("div");
@@ -82,20 +86,77 @@ function addMessage(text,role){
   row.appendChild(bubble);
   chat.appendChild(row);
   chat.scrollTop=chat.scrollHeight;
+  return bubble;
 }
 
-function speak(text){
-  if(!("speechSynthesis" in window)) return;
+function stopSpeaking(){
+  if("speechSynthesis" in window){
+    window.speechSynthesis.cancel();
+  }
+  speechQueue=[];
+  speechBuffer="";
+  isSpeaking=false;
+}
 
-  window.speechSynthesis.cancel();
+function speakNext(){
+  if(!("speechSynthesis" in window) || isSpeaking || speechQueue.length===0) return;
 
+  isSpeaking=true;
+  const text=speechQueue.shift();
   const utterance=new SpeechSynthesisUtterance(text);
   utterance.lang="id-ID";
   utterance.rate=1;
   utterance.pitch=1;
   utterance.volume=1;
 
+  utterance.onend=()=>{
+    isSpeaking=false;
+    speakNext();
+  };
+
+  utterance.onerror=()=>{
+    isSpeaking=false;
+    speakNext();
+  };
+
   window.speechSynthesis.speak(utterance);
+}
+
+function queueSpeech(text,flush=false){
+  speechBuffer += text;
+
+  const parts=speechBuffer.split(/(?<=[.!?。！？])\s+/);
+
+  if(parts.length>1){
+    speechBuffer=parts.pop();
+    for(const part of parts){
+      if(part.trim()) speechQueue.push(part.trim());
+    }
+    speakNext();
+  }
+
+  if(flush && speechBuffer.trim()){
+    speechQueue.push(speechBuffer.trim());
+    speechBuffer="";
+    speakNext();
+  }
+}
+
+function musicSearch(query){
+  const cleanQuery=query.trim() || "lofi hip hop";
+  const url="https://www.youtube.com/results?search_query="+encodeURIComponent(cleanQuery);
+  window.open(url,"_blank","noopener,noreferrer");
+}
+
+function tryMusicCommand(message){
+  const match=message.match(/^(?:putar|mainkan|play|cari(?:kan)? musik)\s+(.+)$/i);
+  if(!match) return false;
+
+  const query=match[1].trim();
+  addMessage("🎵 Mencari musik: "+query,"user");
+  addMessage("Gue buka pencarian musiknya di tab baru. Browser gratis, manusia bahagia, kapitalisme sedikit bingung.","assistant");
+  musicSearch(query);
+  return true;
 }
 
 async function checkStatus(){
@@ -112,29 +173,84 @@ async function checkStatus(){
 async function sendMessage(message){
   if(!message || send.disabled) return;
 
+  stopSpeaking();
+
+  if(tryMusicCommand(message)){
+    input.value="";
+    return;
+  }
+
   addMessage(message,"user");
   input.value="";
   send.disabled=true;
   mic.disabled=true;
   input.disabled=true;
+  hint.textContent="JARVIS lagi mikir...";
+
+  const assistantBubble=addMessage("","assistant");
+  let reply="";
 
   try{
-    const res=await fetch("/api/chat",{
+    const res=await fetch("/api/chat/stream",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({message})
     });
 
-    const data=await res.json();
-    const reply=data.reply || ("Error: "+(data.error||"Unknown error"));
-
-    addMessage(reply,"assistant");
-
-    if(data.reply){
-      speak(data.reply);
+    if(!res.ok){
+      let data={};
+      try{ data=await res.json(); }catch{}
+      throw new Error(data.error || "HTTP "+res.status);
     }
+
+    if(!res.body){
+      throw new Error("Browser tidak mendukung streaming response.");
+    }
+
+    const reader=res.body.getReader();
+    const decoder=new TextDecoder();
+    let buffer="";
+
+    while(true){
+      const {value,done}=await reader.read();
+      if(done) break;
+
+      buffer += decoder.decode(value,{stream:true});
+      const events=buffer.split("\n\n");
+      buffer=events.pop() || "";
+
+      for(const event of events){
+        const line=event.split("\n").find(item=>item.startsWith("data:"));
+        if(!line) continue;
+
+        const payload=line.slice(5).trim();
+        if(payload==="[DONE]") continue;
+
+        const data=JSON.parse(payload);
+
+        if(data.error){
+          throw new Error(data.error);
+        }
+
+        if(data.delta){
+          reply += data.delta;
+          assistantBubble.textContent=reply;
+          chat.scrollTop=chat.scrollHeight;
+          queueSpeech(data.delta);
+        }
+      }
+    }
+
+    queueSpeech("",true);
+
+    if(!reply){
+      assistantBubble.textContent="JARVIS tidak mengirim teks.";
+    }
+
+    hint.textContent="Siap.";
   }catch(error){
-    addMessage("Tidak bisa menghubungi server JARVIS: "+error.message,"assistant");
+    assistantBubble.textContent="Tidak bisa menghubungi JARVIS: "+error.message;
+    hint.textContent="Terjadi error.";
   }finally{
     send.disabled=false;
     mic.disabled=false;
@@ -153,6 +269,12 @@ document.querySelectorAll(".quick").forEach(button=>{
   button.addEventListener("click",()=>sendMessage(button.dataset.message));
 });
 
+document.getElementById("musicTest").addEventListener("click",()=>{
+  addMessage("🎵 Test musik","user");
+  addMessage("Gue buka pencarian musik gratis di YouTube. Tidak perlu API key musik dulu.","assistant");
+  musicSearch("lofi hip hop");
+});
+
 const SpeechRecognition=window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if(SpeechRecognition){
@@ -162,6 +284,7 @@ if(SpeechRecognition){
   recognition.interimResults=true;
 
   recognition.onstart=()=>{
+    stopSpeaking();
     isListening=true;
     finalTranscript="";
     mic.classList.add("recording");
@@ -224,6 +347,7 @@ if(SpeechRecognition){
     }
 
     try{
+      stopSpeaking();
       input.value="";
       finalTranscript="";
       recognition.start();
