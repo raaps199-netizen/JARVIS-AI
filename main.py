@@ -71,9 +71,13 @@ def ask_jarvis(client: OpenAI, user_message: str) -> str:
 
 
 def transcribe_audio(client: OpenAI, audio_file):
+    # Flask gives us a FileStorage object. The OpenAI SDK expects bytes,
+    # a file-like object, a PathLike, or a supported upload tuple.
+    audio_bytes = audio_file.read()
+
     transcript = client.audio.transcriptions.create(
         model=TRANSCRIPTION_MODEL,
-        file=audio_file,
+        file=(audio_file.filename or "jarvis-voice.webm", audio_bytes, audio_file.mimetype or "audio/webm"),
         language="id",
     )
     return transcript.text.strip()
