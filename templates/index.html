@@ -150,10 +150,20 @@ function cleanSpeechText(text){
     .trim();
 }
 
-function getIndonesianVoice(){
+function getJarvisVoice(){
   const voices=window.speechSynthesis.getVoices();
-  return voices.find(v=>/^id-ID$/i.test(v.lang))
-    || voices.find(v=>/^id[-_]/i.test(v.lang))
+  // Utamakan suara Indonesia supaya pelafalan tetap jelas.
+  const indonesian=voices.filter(v=>/^id([-_]|$)/i.test(v.lang));
+  const maleHints=/male|david|mark|daniel|george|james|guy|ryan|alex|fred|thomas|jorge/i;
+  const maleIndonesian=indonesian.find(v=>maleHints.test(v.name));
+  if(maleIndonesian) return maleIndonesian;
+  if(indonesian.length) return indonesian[0];
+
+  // Fallback: suara Inggris bernuansa maskulin, jika tersedia di perangkat.
+  const english=voices.filter(v=>/^en([-_]|$)/i.test(v.lang));
+  return english.find(v=>maleHints.test(v.name))
+    || english.find(v=>/Google UK English Male|Microsoft David/i.test(v.name))
+    || voices[0]
     || null;
 }
 
@@ -170,10 +180,10 @@ function speakNext(){
   }
 
   const utterance=new SpeechSynthesisUtterance(text);
-  utterance.lang="id-ID";
-  utterance.voice=getIndonesianVoice();
-  utterance.rate=0.94;
-  utterance.pitch=1;
+  utterance.voice=getJarvisVoice();
+  utterance.lang=utterance.voice?.lang || "id-ID";
+  utterance.rate=0.90;
+  utterance.pitch=0.82;
   utterance.volume=1;
 
   utterance.onend=()=>{
