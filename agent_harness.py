@@ -14,7 +14,10 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-import speech_recognition as sr
+import time
+import wave
+
+import sounddevice as sd
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -23,7 +26,10 @@ from jarvis_tts import speak
 load_dotenv()
 
 MODEL = os.getenv("JARVIS_MODEL", "gpt-6-luna")
-TRANSCRIPTION_LANGUAGE = os.getenv("JARVIS_LANGUAGE", "id-ID")
+TRANSCRIPTION_LANGUAGE = os.getenv("JARVIS_LANGUAGE", "id")
+SAMPLE_RATE = 16000
+RECORD_SECONDS = 6
+
 
 SYSTEM_PROMPT = """
 You are JARVIS, a local Windows desktop AI assistant.
@@ -233,6 +239,32 @@ def ask_agent(client: OpenAI, user_text: str) -> str:
     return "Saya berhenti setelah beberapa langkah tool agar tidak masuk loop."
 
 
+def record_audio(path: Path) -> None:
+    print(f"[MIC] Merekam {RECORD_SECONDS} detik...")
+    recording = sd.rec(
+        int(RECORD_SECONDS * SAMPLE_RATE),
+        samplerate=SAMPLE_RATE,
+        channels=1,
+        dtype="int16",
+    )
+    sd.wait()
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(SAMPLE_RATE)
+        wav.writeframes(recording.tobytes())
+
+
+def transcribe(client: OpenAI, path: Path) -> str:
+    with path.open("rb") as audio_file:
+        result = client.audio.transcriptions.create(
+            model=os.getenv("JARVIS_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"),
+            file=audio_file,
+            language=TRANSCRIPTION_LANGUAGE,
+        )
+    return result.text.strip()
+
+
 def main() -> None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -241,60 +273,53 @@ def main() -> None:
 
     client = OpenAI(api_key=api_key)
     speak("Sistem aktif, Sir. Saya siap mendengarkan.")
-
-    recognizer = sr.Recognizer()
-    recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.7
-    recognizer.non_speaking_duration = 0.4
+    audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
 
     try:
-        with sr.Microphone() as source:
-            print("Kalibrasi mikrofon...")
-            recognizer.adjust_for_ambient_noise(source, duration=1)
-            speak("Mikrofon siap.")
+        while True:
+            try:
+                record_audio(audio_path)
+                heard = transcribe(client, audio_path)
+            except (OSError, sd.PortAudioError) as exc:
+                print(f"[MIC] {exc}")
+                speak("Mikrofon tidak bisa diakses. Periksa perangkat audio Windows.")
+                time.sleep(2)
+                continue
+            except Exception as exc:
+                print(f"[STT] {exc}")
+                speak("Pengenalan suara gagal. Periksa koneksi dan API key.")
+                time.sleep(2)
+                continue
 
-            while True:
-                print("Mendengarkan...")
-                try:
-                    audio = recognizer.listen(source, timeout=None, phrase_time_limit=12)
-                    heard = recognizer.recognize_google(
-                        audio,
-                        language=TRANSCRIPTION_LANGUAGE,
-                    ).strip()
-                except sr.UnknownValueError:
-                    continue
-                except sr.RequestError as exc:
-                    print(f"[STT] Google Speech Recognition error: {exc}")
-                    speak("Layanan pengenalan suara bermasalah. Periksa koneksi internet.")
-                    continue
+            if not heard:
+                continue
 
-                if not heard:
-                    continue
+            print(f"Sir: {heard}")
+            normalized = heard.lower().strip()
 
-                print(f"Sir: {heard}")
-                normalized = heard.lower().strip()
+            if normalized in {
+                "shutdown jarvis",
+                "matikan jarvis",
+                "berhenti mendengarkan",
+                "matikan mode suara",
+                "stop jarvis",
+            }:
+                speak("Mode suara dihentikan, Sir.")
+                break
 
-                if normalized in {
-                    "shutdown jarvis",
-                    "matikan jarvis",
-                    "berhenti mendengarkan",
-                    "matikan mode suara",
-                    "stop jarvis",
-                }:
-                    speak("Mode suara dihentikan, Sir.")
-                    break
+            try:
+                reply = ask_agent(client, heard)
+                if reply:
+                    speak(reply)
+            except Exception as exc:
+                print(f"[AGENT] {exc}")
+                speak("Saya gagal memproses permintaan itu, Sir. Periksa log terminal.")
 
-                try:
-                    reply = ask_agent(client, heard)
-                    if reply:
-                        speak(reply)
-                except Exception as exc:
-                    print(f"[AGENT] {exc}")
-                    speak("Saya gagal memproses permintaan itu, Sir. Periksa log terminal.")
-
-    except OSError as exc:
-        print(f"[MIC] {exc}")
-        speak(f"Mikrofon tidak bisa diakses. {exc}")
+    finally:
+        try:
+            audio_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
