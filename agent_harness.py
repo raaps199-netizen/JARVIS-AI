@@ -146,6 +146,7 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"ui_inspect","description":"Inspect visible non-sensitive Windows UI controls so JARVIS can understand what is currently on screen before clicking. Do not use it to retrieve passwords or sensitive fields.","parameters":{"type":"object","properties":{"window_title":{"type":"string"}}}}},
 
+    {"type":"function","function":{"name":"visual_click","description":"Use the vision model to locate a requested visible UI target on the current Windows screen and click it. This supports spatial requests such as click the second video, click the top-right button, click the third card, or click the play icon. The target must be visible on the current screen.","parameters":{"type":"object","properties":{"target":{"type":"string"},"button":{"type":"string","enum":["left","right","middle"]}},"required":["target"]}}},
     {"type":"function","function":{"name":"see_screen","description":"Capture the current Windows screen and analyze visible UI/content with a vision model. Use this when the user asks what is on screen or when visual understanding is needed before an action.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
     {"type":"function","function":{"name":"see_webcam","description":"Capture one frame from the default webcam and analyze what is visibly present. Use only when the user explicitly asks JARVIS to look through the webcam/camera.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}},
     {"type":"function","function":{"name":"scroll_mouse","description":"Scroll the currently focused desktop UI.","parameters":{"type":"object","properties":{"clicks":{"type":"integer"}},"required":["clicks"]}}},
@@ -722,6 +723,61 @@ def wait_seconds(seconds:float) -> str:
     except Exception as exc: return f"Gagal menunggu: {exc}"
 
 
+def _locate_visual_target(client: Groq, image_bytes: bytes, target: str, width: int, height: int) -> tuple[int, int, str]:
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    prompt = (
+        "You are locating one visible desktop UI target on a screenshot.\n"
+        f"Target: {target}\n\n"
+        "Return ONLY one JSON object with this exact schema:\n"
+        '{"x": 123, "y": 456, "confidence": 0.0, "reason": "brief description"}\n\n'
+        f"Coordinates must use the original screenshot pixels, x 0-{width - 1}, y 0-{height - 1}.\n"
+        "Count repeated items in normal reading order: top-to-bottom, then left-to-right.\n"
+        "For requests such as \"second video\", select the second visible video result/card, not an ad, navigation item, or unrelated sidebar item.\n"
+        "For requests such as \"third button\" or \"second card\", count only visually equivalent visible targets.\n"
+        "If the target is not clearly visible, return x=-1, y=-1, confidence=0.\n"
+        "Return no markdown and no extra text."
+    )
+    response = client.chat.completions.create(
+        model=VISION_MODEL,
+        messages=[{"role":"user","content":[
+            {"type":"text","text":prompt},
+            {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{encoded}"}},
+        ]}],
+        temperature=0,
+        max_completion_tokens=220,
+    )
+    raw = (response.choices[0].message.content or "").strip()
+    clean = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        data = json.loads(clean)
+        x = int(data.get("x", -1))
+        y = int(data.get("y", -1))
+        confidence = float(data.get("confidence", 0))
+        reason = str(data.get("reason", "")).strip()
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"Vision returned invalid locator JSON: {raw[:500]}") from exc
+    if x < 0 or y < 0 or x >= width or y >= height or confidence < 0.45:
+        raise RuntimeError(f"Could not confidently locate '{target}' on the current screen.")
+    return x, y, reason
+
+
+def visual_click(client: Groq, target: str, button: str = "left") -> str:
+    target = str(target).strip()
+    if not target:
+        return "The visual target is empty."
+    try:
+        shot = pyautogui.screenshot()
+        width, height = shot.size
+        from io import BytesIO
+        buf = BytesIO()
+        shot.convert("RGB").save(buf, format="JPEG", quality=82)
+        x, y, reason = _locate_visual_target(client, buf.getvalue(), target, width, height)
+        pyautogui.click(x, y, button=str(button))
+        return f"Clicked the visual target '{target}' at ({x}, {y}). {reason}"
+    except Exception as exc:
+        return f"Failed to visually locate/click '{target}': {exc}"
+
+
 def _vision_answer(client: Groq, image_bytes: bytes, question: str, source: str) -> str:
     encoded=base64.b64encode(image_bytes).decode("utf-8")
     response=client.chat.completions.create(
@@ -824,6 +880,10 @@ def run_tool(name: str, arguments: dict[str, Any], client: Groq | None = None) -
         return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
     if name == "ui_inspect":
         return ui_inspect(str(arguments.get("window_title","")))
+    if name == "visual_click":
+        if client is None:
+            return "Vision is unavailable without an active Groq client."
+        return visual_click(client, str(arguments["target"]), str(arguments.get("button", "left")))
     if name == "see_screen":
         if client is None:
             return "Vision is unavailable without an active Groq client."
