@@ -1490,6 +1490,40 @@ def try_direct_command(text: str, client: Groq | None = None) -> str | None:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
         return "__JARVIS_STOP__"
 
+    # Spatial/ordinal visual commands: use the current screen directly when the
+    # user explicitly identifies a repeated visual target. This avoids burning an
+    # agent turn and makes commands like "choose the second video" deterministic.
+    visual_targets = {
+        "choose the first video": "the first visible video result",
+        "choose the second video": "the second visible video result",
+        "choose the third video": "the third visible video result",
+        "choose the fourth video": "the fourth visible video result",
+        "pick the first video": "the first visible video result",
+        "pick the second video": "the second visible video result",
+        "pick the third video": "the third visible video result",
+        "pick the fourth video": "the fourth visible video result",
+        "click the first video": "the first visible video result",
+        "click the second video": "the second visible video result",
+        "click the third video": "the third visible video result",
+        "click the fourth video": "the fourth visible video result",
+        "open the first video": "the first visible video result",
+        "open the second video": "the second visible video result",
+        "open the third video": "the third visible video result",
+        "open the fourth video": "the fourth visible video result",
+        "video pertama": "the first visible video result",
+        "video kedua": "the second visible video result",
+        "video ketiga": "the third visible video result",
+        "video keempat": "the fourth visible video result",
+        "pilih video pertama": "the first visible video result",
+        "pilih video kedua": "the second visible video result",
+        "pilih video ketiga": "the third visible video result",
+        "pilih video keempat": "the fourth visible video result",
+    }
+    if normalized in visual_targets and client is not None:
+        result = visual_click(client, visual_targets[normalized])
+        print(f"[DIRECT] visual_click -> {result}")
+        return result
+
     for click_prefix in ("klik ", "click "):
         if normalized.startswith(click_prefix):
             target=normalized[len(click_prefix):].strip()
