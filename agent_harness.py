@@ -203,7 +203,7 @@ def browser_search(client: Groq, query: str) -> str:
         locator_prompt = (
             "Locate the primary search field inside the currently visible webpage. "
             "Do not select the browser address bar, URL bar, navigation, or unrelated form fields. "
-            "Return ONLY JSON: {\\"x\\": 123, \\"y\\": 456, \\"confidence\\": 0.0, \\"reason\\": \\"brief description\\"} "
+            "Return ONLY JSON: {\"x\": 123, \"y\": 456, \"confidence\": 0.0, \"reason\": \"brief description\"} "
             f"using original screenshot pixels x=0..{width-1}, y=0..{height-1}. "
             "If no clear webpage search field is visible, return x=-1, y=-1, confidence=0."
         )
