@@ -396,8 +396,25 @@ def try_direct_command(text: str) -> str | None:
 
 
 def transcribe(client: genai.Client, path: Path) -> str:
-    audio_bytes = path.read_bytes()
+    # Local Google Speech first: fast and independent of Gemini availability.
+    # Gemini remains the fallback for cases where Google cannot recognize the audio.
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(str(path)) as source:
+        audio = recognizer.record(source)
+
     try:
+        text = recognizer.recognize_google(audio, language="id-ID")
+        text = text.strip()
+        if text:
+            print(f"[STT] Google: {text}")
+            return text
+    except sr.UnknownValueError:
+        pass
+    except sr.RequestError as exc:
+        print(f"[STT] Google Speech gagal: {exc}")
+
+    try:
+        audio_bytes = path.read_bytes()
         response = _gemini_generate(
             client,
             model=STT_MODEL,
@@ -415,18 +432,8 @@ def transcribe(client: genai.Client, path: Path) -> str:
         )
         return (response.text or "").strip()
     except Exception as exc:
-        print(f"[STT] Gemini gagal: {exc}")
-        print("[STT] Mencoba fallback Google Speech Recognition...")
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(str(path)) as source:
-            audio = recognizer.record(source)
-        try:
-            text = recognizer.recognize_google(audio, language="id-ID")
-            return text.strip()
-        except sr.UnknownValueError:
-            return ""
-        except sr.RequestError as fallback_exc:
-            raise RuntimeError(f"Gemini STT dan fallback Google gagal: {fallback_exc}") from fallback_exc
+        print(f"[STT] Gemini fallback gagal: {exc}")
+        return ""
 
 
 def main() -> None:
