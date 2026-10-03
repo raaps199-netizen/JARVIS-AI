@@ -17,11 +17,6 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9")
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 
-_fallback = pyttsx3.init()
-_fallback.setProperty("rate", 172)
-_fallback.setProperty("volume", 1.0)
-
-
 _interrupt_event = threading.Event()
 _elevenlabs_quota_exhausted = False
 
@@ -65,19 +60,13 @@ def _fallback_speak(text: str) -> None:
             engine.setProperty("voice", voice.id)
             break
 
-    worker = threading.Thread(
-        target=lambda: (engine.say(text), engine.runAndWait()),
-        daemon=True,
-    )
-    worker.start()
-    while worker.is_alive():
-        if _speech_interrupted():
-            try:
-                engine.stop()
-            except Exception:
-                pass
-            break
-        worker.join(0.05)
+    # Keep each fallback utterance isolated. The previous implementation
+    # accidentally reused a pyttsx3 event loop, which causes "run loop already started".
+    try:
+        engine.say(text)
+        engine.runAndWait()
+    except RuntimeError as exc:
+        print(f"[TTS] Windows TTS error: {exc}")
 
 
 def _elevenlabs_speak(text: str) -> bool:
