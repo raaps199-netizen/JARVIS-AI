@@ -302,6 +302,7 @@ async function sendMessage(message){
 
   const assistantBubble=addMessage("","assistant");
   let reply="";
+  const noVoice=/^(jangan|gausah|gak usah|nggak usah|tanpa)\s+(pakai\s+)?(suara|voice|audio)/i.test(message);
 
   try{
     const res=await fetch("/api/chat/stream",{
@@ -349,12 +350,16 @@ async function sendMessage(message){
           reply += data.delta;
           assistantBubble.textContent=reply;
           chat.scrollTop=chat.scrollHeight;
-          queueSpeech(data.delta);
+          if(!noVoice){
+            queueSpeech(data.delta);
+          }
         }
       }
     }
 
-    queueSpeech("",true);
+    if(!noVoice){
+      queueSpeech("",true);
+    }
 
     if(!reply){
       assistantBubble.textContent="JARVIS tidak mengirim teks.";
