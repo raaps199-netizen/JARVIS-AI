@@ -52,7 +52,7 @@ def _elevenlabs_speak(text: str) -> bool:
     }).encode("utf-8")
 
     request = Request(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}?output_format=pcm_44100",
+        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}?output_format=pcm_24000",
         data=payload,
         headers={
             "xi-api-key": ELEVENLABS_API_KEY,
