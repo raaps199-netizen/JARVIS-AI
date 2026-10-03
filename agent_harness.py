@@ -202,6 +202,7 @@ def ask_agent(client: genai.Client, user_text: str) -> str:
         system_instruction=SYSTEM_PROMPT,
         tools=TOOLS,
         temperature=0.7,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
     for _ in range(5):
