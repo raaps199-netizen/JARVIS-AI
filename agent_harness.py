@@ -134,22 +134,22 @@ TOOLS = TOOL_DECLARATIONS
 
 def open_app(name: str) -> str:
     if name not in APPS:
-        return f"Aplikasi {name} belum tersedia."
+        return f"The application {name} is not available."
     try:
         subprocess.Popen(APPS[name], shell=False)
-        return f"Berhasil membuka {name}."
+        return f"Successfully opened {name}."
     except OSError as exc:
-        return f"Gagal membuka {name}: {exc}"
+        return f"Failed to open {name}: {exc}"
 
 
 def search_web(query: str) -> str:
     query = str(query).strip()
     if not query:
-        return "Query pencarian kosong."
+        return "The search query is empty."
     try:
         url = "https://www.google.com/search?q=" + quote_plus(query)
         opened = webbrowser.open(url, new=2)
-        return f"Berhasil mencari {query} di Google." if opened else "Browser menolak membuka hasil pencarian."
+        return f"Successfully searched Google for {query}." if opened else "The browser refused to open the search."
     except OSError as exc:
         return f"Gagal melakukan pencarian: {exc}"
 
@@ -159,22 +159,22 @@ def open_site(name: str) -> str:
         return f"Website {name} belum tersedia."
     try:
         opened = webbrowser.open(SITES[name], new=2)
-        return f"Berhasil membuka {name}." if opened else f"Browser menolak membuka {name}."
+        return f"Successfully opened {name}." if opened else f"Browser menolak membuka {name}."
     except OSError as exc:
-        return f"Gagal membuka {name}: {exc}"
+        return f"Failed to open {name}: {exc}"
 
 
 def open_folder(name: str) -> str:
     folder = FOLDERS.get(name)
     if folder is None:
-        return f"Folder {name} belum tersedia."
+        return f"The folder {name} is not available."
     if not folder.exists():
-        return f"Folder {name} tidak ditemukan."
+        return f"The folder {name} was not found."
     try:
         os.startfile(str(folder))
-        return f"Berhasil membuka folder {name}."
+        return f"Successfully opened the {name} folder."
     except OSError as exc:
-        return f"Gagal membuka folder {name}: {exc}"
+        return f"Failed to open the {name} folder: {exc}"
 
 
 def pc_status() -> str:
@@ -222,11 +222,11 @@ def word_control(
 
         if action == "new_document":
             app.Documents.Add()
-            return "Dokumen Word baru berhasil dibuat."
+            return "A new Word document was created successfully."
 
         if action == "write":
             if not text:
-                return "Teks kosong."
+                return "The text is empty."
             start = sel.Range.Start
             sel.TypeText(str(text))
             end = sel.Range.End
@@ -247,7 +247,7 @@ def word_control(
             alignments = {"left": 0, "center": 1, "right": 2, "justify": 3}
             if alignment in alignments:
                 inserted.ParagraphFormat.Alignment = alignments[alignment]
-            return "Teks berhasil ditulis dan diformat di Word."
+            return "The text was written and formatted in Word successfully."
 
         if action == "format_selection":
             fmt = sel.Font
@@ -267,11 +267,11 @@ def word_control(
             alignments = {"left": 0, "center": 1, "right": 2, "justify": 3}
             if alignment in alignments:
                 sel.ParagraphFormat.Alignment = alignments[alignment]
-            return "Format teks Word berhasil diterapkan."
+            return "Word text formatting was applied successfully."
 
         if action == "select_all":
             doc.Content.Select()
-            return "Seluruh isi dokumen Word berhasil dipilih."
+            return "The entire Word document was selected."
 
         if action == "insert_table":
             r = max(1, min(50, int(rows or 1)))
@@ -283,7 +283,7 @@ def word_control(
         if action == "replace_text":
             find = str(text)
             if not find:
-                return "Teks yang dicari kosong."
+                return "The search text is empty."
             rng = doc.Content
             finder = rng.Find
             finder.ClearFormatting()
@@ -301,12 +301,12 @@ def word_control(
 
         if action == "save":
             doc.Save()
-            return "Dokumen Word berhasil disimpan."
+            return "The Word document was saved successfully."
 
         if action == "save_as":
             target = str(path).strip()
             if not target:
-                return "Path penyimpanan kosong."
+                return "The save path is empty."
             doc.SaveAs2(target)
             return f"Dokumen Word berhasil disimpan sebagai {target}."
 
@@ -318,12 +318,12 @@ def word_control(
 def type_text(text: str) -> str:
     text = str(text)
     if not text:
-        return "Teks kosong."
+        return "The text is empty."
     try:
         pyperclip.copy(text)
         time.sleep(0.1)
         pyautogui.hotkey("ctrl", "v")
-        return "Teks berhasil diketik ke jendela aktif."
+        return "The text was typed into the active window successfully."
     except Exception as exc:
         return f"Gagal mengetik teks: {exc}"
 
@@ -372,12 +372,12 @@ def press_key(key: str) -> str:
 def type_text(text: str) -> str:
     text = str(text)
     if not text:
-        return "Teks kosong."
+        return "The text is empty."
     try:
         pyperclip.copy(text)
         time.sleep(0.1)
         pyautogui.hotkey("ctrl", "v")
-        return "Teks berhasil diketik ke jendela aktif."
+        return "The text was typed into the active window successfully."
     except Exception as exc:
         return f"Gagal mengetik teks: {exc}"
 
@@ -419,7 +419,7 @@ def _ui_windows(window_title: str | None = None):
 def ui_inspect(window_title: str = "") -> str:
     try:
         windows=_ui_windows(window_title.strip() or None)
-        if not windows: return "Tidak menemukan jendela UI yang cocok."
+        if not windows: return "No matching UI window was found."
         lines=[]
         for win in windows[:6]:
             lines.append(f"WINDOW: {(win.window_text() or '').strip()}")
@@ -433,12 +433,12 @@ def ui_inspect(window_title: str = "") -> str:
                     if text and ctype.lower() in {"text","button","edit","tabitem","menuitem","listitem","combobox","checkbox","radiobutton","hyperlink"}:
                         lines.append(f"  {ctype}: {text[:180]}"); count+=1
                 except Exception: pass
-        return "\n".join(lines)[:12000] if lines else "Tidak ada kontrol UI yang terbaca."
+        return "\n".join(lines)[:12000] if lines else "No readable UI controls were found."
     except Exception as exc: return f"Gagal membaca UI Windows: {exc}"
 
 def ui_click(text: str, window_title: str = "") -> str:
     target=str(text).strip()
-    if not target: return "Teks target UI kosong."
+    if not target: return "The UI target text is empty."
     try:
         exact=[]; partial=[]
         for win in _ui_windows(window_title.strip() or None):
@@ -505,13 +505,13 @@ def see_webcam(client: Groq, question: str) -> str:
     try:
         cap=cv2.VideoCapture(0, cv2.CAP_DSHOW)
         if not cap.isOpened():
-            return "Webcam tidak bisa dibuka."
+            return "The webcam could not be opened."
         ok, frame=cap.read()
         if not ok:
-            return "Webcam terbuka tetapi frame tidak berhasil diambil."
+            return "The webcam opened, but no frame could be captured."
         ok, encoded=cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY),80])
         if not ok:
-            return "Frame webcam gagal dikodekan."
+            return "The webcam frame could not be encoded."
         return _vision_answer(client, encoded.tobytes(), question, "webcam")
     except Exception as exc:
         return f"Gagal melihat webcam: {exc}"
@@ -612,7 +612,7 @@ def close_app(name: str) -> str:
     if not target:
         return f"Aplikasi {name} tidak bisa ditutup secara spesifik."
     if os.name != "nt":
-        return "Penutupan aplikasi spesifik hanya didukung di Windows."
+        return "Closing a specific application is only supported on Windows."
 
     import ctypes
     from ctypes import wintypes
@@ -692,7 +692,7 @@ def close_app(name: str) -> str:
         time.sleep(0.8)
 
     if name == "calculator" and calculator_window_exists():
-        return "Saya menemukan Kalkulator, tetapi Windows tidak menutup jendelanya."
+        return "I found Calculator, but Windows did not close its window."
 
     if not matches and name != "calculator":
         return f"{name} tidak sedang terbuka."
@@ -705,7 +705,7 @@ def close_app(name: str) -> str:
 def close_active_window() -> str:
     try:
         pyautogui.hotkey("alt", "f4")
-        return "Jendela aktif ditutup dengan Alt+F4."
+        return "The active window was closed with Alt+F4."
     except Exception as exc:
         return f"Gagal menutup jendela aktif: {exc}"
 
@@ -781,7 +781,7 @@ def ask_agent(client: Groq, user_text: str) -> str:
                 "content": result,
             })
 
-    return "Saya berhenti setelah beberapa langkah tool agar tidak masuk loop."
+    return "I stopped after several tool steps to avoid an infinite loop."
 
 
 def record_audio(path: Path) -> None:
@@ -898,7 +898,7 @@ def try_direct_command(text: str) -> str | None:
         "siapa kamu", "lu siapa", "lo siapa", "kamu siapa",
     }
     if normalized in intro_phrases:
-        result = "Gue JARVIS, asisten desktop lokal lu. Gue bisa buka aplikasi, cari di web, mengetik, menekan shortcut yang diizinkan, menutup aplikasi tertentu, membaca status PC dasar, dan menjalankan perintah desktop yang aman."
+        result = "I am JARVIS, your local desktop assistant. I can open applications, search the web, type text, press approved shortcuts, close specific applications, read basic PC status, and perform safe desktop actions."
         print("[DIRECT] self_intro -> JARVIS")
         return result
 
@@ -1046,7 +1046,7 @@ def main() -> None:
         return
 
     client = Groq(api_key=GROQ_API_KEY)
-    speak("Sistem aktif, Sir. Saya siap mendengarkan.")
+    speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
 
     try:
@@ -1056,12 +1056,12 @@ def main() -> None:
                 heard = transcribe(client, audio_path)
             except (OSError, sd.PortAudioError) as exc:
                 print(f"[MIC] {exc}")
-                speak("Mikrofon tidak bisa diakses. Periksa perangkat audio Windows.")
+                speak("I cannot access the microphone. Please check your Windows audio device.")
                 time.sleep(2)
                 continue
             except Exception as exc:
                 print(f"[STT] {exc}")
-                speak("Pengenalan suara gagal. Periksa koneksi dan GROQ API key.")
+                speak("Speech recognition failed. Please check the connection and GROQ API key.")
                 time.sleep(2)
                 continue
 
@@ -1111,14 +1111,14 @@ def main() -> None:
 
             if shutdown_intent:
                 print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
-                speak("Baik, Sir. Saya mematikan sistem JARVIS.")
+                speak("Understood, Sir. Shutting down the JARVIS system.")
                 return
 
             direct_reply = try_direct_command(heard)
             if direct_reply is not None:
                 if direct_reply == "__JARVIS_STOP__":
                     print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
-                    speak("Baik, Sir. Saya mematikan sistem JARVIS.")
+                    speak("Understood, Sir. Shutting down the JARVIS system.")
                     return
                 speak(direct_reply)
                 continue
@@ -1126,7 +1126,7 @@ def main() -> None:
             try:
                 reply = ask_agent(client, heard)
                 if reply == "__JARVIS_STOP__":
-                    speak("Baik, Sir. Saya mematikan sistem JARVIS.")
+                    speak("Understood, Sir. Shutting down the JARVIS system.")
                     break
                 if reply:
                     speak(reply)
@@ -1135,7 +1135,7 @@ def main() -> None:
                 break
             except Exception as exc:
                 print(f"[AGENT] {exc}")
-                speak("Saya gagal memproses permintaan itu, Sir. Periksa log terminal.")
+                speak("I could not process that request, Sir. Please check the terminal log.")
 
     except KeyboardInterrupt:
         print("\n[JARVIS] Dihentikan dari keyboard.")
