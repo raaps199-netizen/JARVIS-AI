@@ -26,7 +26,10 @@
     .assistant .bubble{background:var(--panel2);border:1px solid var(--line)}.user .bubble{background:#18304a;border:1px solid #284c73}
     .composer{padding:16px;border-top:1px solid var(--line)}form{display:flex;gap:10px}
     input{flex:1;min-width:0;background:#080c12;border:1px solid var(--line);color:var(--text);border-radius:13px;padding:13px 14px;outline:none}
-    input:focus{border-color:#3c638b}button.send{border:0;border-radius:13px;padding:0 19px;color:white;background:linear-gradient(135deg,#2d7fbd,#6650b7);cursor:pointer;font-weight:600}
+    input:focus{border-color:#3c638b}
+    button.send,button.mic{border:0;border-radius:13px;padding:0 19px;color:white;background:linear-gradient(135deg,#2d7fbd,#6650b7);cursor:pointer;font-weight:600}
+    button.mic{min-width:58px;padding:0 14px;background:#172232;border:1px solid #30435c}
+    button.mic.recording{background:#6b2633;border-color:#a8485b}
     button:disabled{opacity:.5;cursor:not-allowed}.hint{color:var(--muted);font-size:11px;margin-top:9px}
     @media(max-width:760px){.layout{grid-template-columns:1fr;padding:14px 0}aside{display:none}main{min-height:calc(100vh - 28px)}}
   </style>
@@ -40,25 +43,80 @@
     <button class="quick" data-message="Halo Jarvis">👋 Halo Jarvis</button>
     <button class="quick" data-message="Jelaskan status prototype kita sekarang.">📊 Status prototype</button>
     <button class="quick" data-message="Bantu gue merencanakan fitur berikutnya untuk Jarvis.">🧠 Rencanakan fitur</button>
-    <div class="side-title">Current stage</div><div class="label">Stage 1</div><div class="value">Web → AI → Web</div>
-    <div class="hint">Mic, speaker, wake word, dan musik menyusul.</div>
+    <div class="side-title">Current stage</div><div class="label">Stage 1.5</div><div class="value">Web → Voice → AI</div>
+    <div class="hint">Push-to-talk aktif. Speaker dan wake word menyusul.</div>
   </aside>
   <main class="panel">
-    <header><div><h2>JARVIS Console</h2><span>Local control dashboard</span></div><span>API</span></header>
-    <section id="chat"><div class="msg assistant"><div class="bubble">JARVIS online. Dashboard siap menerima perintah.</div></div></section>
+    <header><div><h2>JARVIS Console</h2><span>Voice + text control</span></div><span>API</span></header>
+    <section id="chat"><div class="msg assistant"><div class="bubble">JARVIS online. Dashboard siap menerima teks atau suara.</div></div></section>
     <div class="composer">
-      <form id="form"><input id="input" autocomplete="off" placeholder="Ketik perintah ke Jarvis..." autofocus><button class="send" id="send" type="submit">Kirim</button></form>
-      <div class="hint">Perintah dikirim ke Python di laptop. API key tetap berada di server lokal, bukan di browser.</div>
+      <form id="form">
+        <input id="input" autocomplete="off" placeholder="Ketik perintah ke Jarvis...">
+        <button class="mic" id="mic" type="button" title="Tekan untuk bicara">🎙️</button>
+        <button class="send" id="send" type="submit">Kirim</button>
+      </form>
+      <div class="hint" id="hint">Klik 🎙️ untuk merekam. Klik lagi untuk berhenti.</div>
     </div>
   </main>
 </div>
 <script>
-const chat=document.getElementById("chat"),input=document.getElementById("input"),send=document.getElementById("send"),dot=document.getElementById("dot"),statusText=document.getElementById("statusText");
+const chat=document.getElementById("chat"),input=document.getElementById("input"),send=document.getElementById("send"),mic=document.getElementById("mic"),dot=document.getElementById("dot"),statusText=document.getElementById("statusText"),hint=document.getElementById("hint");
+let recorder=null,chunks=[];
+
 function addMessage(text,role){const row=document.createElement("div");row.className="msg "+role;const bubble=document.createElement("div");bubble.className="bubble";bubble.textContent=text;row.appendChild(bubble);chat.appendChild(row);chat.scrollTop=chat.scrollHeight;}
+
 async function checkStatus(){try{const res=await fetch("/api/status");const data=await res.json();dot.classList.toggle("online",data.online);statusText.textContent=data.online?"Online":"Offline";}catch{statusText.textContent="Server tidak aktif";}}
-async function sendMessage(message){if(!message||send.disabled)return;addMessage(message,"user");input.value="";send.disabled=true;input.disabled=true;try{const res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})});const data=await res.json();addMessage(data.reply||("Error: "+(data.error||"Unknown error")),"assistant");}catch(error){addMessage("Tidak bisa menghubungi server JARVIS: "+error.message,"assistant");}finally{send.disabled=false;input.disabled=false;input.focus();checkStatus();}}
+
+async function sendMessage(message){if(!message||send.disabled)return;addMessage(message,"user");input.value="";send.disabled=true;mic.disabled=true;input.disabled=true;try{const res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})});const data=await res.json();addMessage(data.reply||("Error: "+(data.error||"Unknown error")),"assistant");}catch(error){addMessage("Tidak bisa menghubungi server JARVIS: "+error.message,"assistant");}finally{send.disabled=false;mic.disabled=false;input.disabled=false;input.focus();checkStatus();}}
+
 document.getElementById("form").addEventListener("submit",e=>{e.preventDefault();sendMessage(input.value.trim());});
 document.querySelectorAll(".quick").forEach(button=>button.addEventListener("click",()=>sendMessage(button.dataset.message)));
+
+mic.addEventListener("click",async()=>{
+  if(recorder && recorder.state==="recording"){
+    recorder.stop();
+    return;
+  }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    chunks=[];
+    recorder=new MediaRecorder(stream);
+    recorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
+    recorder.onstart=()=>{
+      mic.classList.add("recording");
+      mic.textContent="⏹️";
+      hint.textContent="Lagi merekam... klik ⏹️ untuk berhenti.";
+    };
+    recorder.onstop=async()=>{
+      stream.getTracks().forEach(track=>track.stop());
+      mic.classList.remove("recording");
+      mic.textContent="🎙️";
+      hint.textContent="Memproses suara...";
+      mic.disabled=true;
+      try{
+        const blob=new Blob(chunks,{type:recorder.mimeType||"audio/webm"});
+        const formData=new FormData();
+        formData.append("audio",blob,"jarvis-voice.webm");
+        const res=await fetch("/api/transcribe",{method:"POST",body:formData});
+        const data=await res.json();
+        if(!res.ok) throw new Error(data.error||"Transkripsi gagal.");
+        if(data.text){input.value=data.text;addMessage("🎙️ "+data.text,"user");await sendMessage(data.text);input.value="";}
+        else hint.textContent="Gue nggak nangkep apa-apa. Coba lagi.";
+      }catch(error){
+        addMessage("Voice error: "+error.message,"assistant");
+        hint.textContent="Voice error. Coba lagi.";
+      }finally{
+        mic.disabled=false;
+        if(!input.disabled)input.focus();
+      }
+    };
+    recorder.start();
+  }catch(error){
+    hint.textContent="Mic tidak bisa diakses. Izinkan microphone di browser.";
+    addMessage("JARVIS: Browser belum memberi izin microphone.","assistant");
+  }
+});
+
 checkStatus();
 </script>
 </body>
