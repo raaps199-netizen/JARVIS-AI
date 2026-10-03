@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import shutil
+import sys
 import subprocess
 import time
 import wave
@@ -36,6 +37,7 @@ MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
+TEXT_MODE = "--text" in sys.argv or os.getenv("JARVIS_TEXT_MODE", "").lower() in {"1", "true", "yes", "on"}
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
@@ -1680,6 +1682,17 @@ def transcribe(client: Groq, path: Path) -> str:
 
 
 
+def confirm_action_via_text(description: str) -> bool:
+    print(f"[CONFIRM] High-impact action: {description}")
+    try:
+        answer = input("[CONFIRM] Type yes to proceed or no to cancel: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    normalized = " ".join(answer.split())
+    yes = {"yes", "y", "approve", "approved", "do it", "go ahead", "iya", "ya", "boleh", "lanjut", "jalankan"}
+    return normalized in yes or normalized.startswith(tuple(f"{item} " for item in yes))
+
+
 def confirm_action_via_voice(client: Groq, description: str) -> bool:
     prompt_path = Path(__file__).resolve().with_name(".jarvis_confirm.wav")
     speak(
@@ -1718,9 +1731,66 @@ def main() -> None:
 
     client = Groq(api_key=GROQ_API_KEY)
     global CONFIRMATION_CALLBACK
-    CONFIRMATION_CALLBACK = lambda description: confirm_action_via_voice(client, description)
+    CONFIRMATION_CALLBACK = (
+        (lambda description: confirm_action_via_text(description))
+        if TEXT_MODE
+        else (lambda description: confirm_action_via_voice(client, description))
+    )
     speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
+
+    if TEXT_MODE:
+        print("JARVIS text mode online, Sir. Type commands; use /exit to quit.")
+        try:
+            while True:
+                try:
+                    heard = input("Sir> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\n[JARVIS] Text mode stopped.")
+                    break
+
+                if not heard:
+                    continue
+                if heard.lower().strip() in {"/exit", "/quit", "exit", "quit"}:
+                    print("[JARVIS] Text mode stopped.")
+                    break
+
+                normalized = " ".join(heard.lower().strip().split())
+                normalized = normalized.strip(".,!?;:")
+
+                shutdown_phrases = {
+                    "shutdown jarvis", "matikan jarvis", "matikan diri",
+                    "matikan diri sendiri", "matikan dirimu", "stop jarvis",
+                }
+                shutdown_intent = normalized in shutdown_phrases
+                if shutdown_intent:
+                    print("[JARVIS] Shutdown command received.")
+                    print("JARVIS: Understood, Sir. Shutting down the JARVIS system.")
+                    break
+
+                direct_reply = try_direct_command(heard, client)
+                if direct_reply is not None:
+                    if direct_reply == "__JARVIS_STOP__":
+                        print("[JARVIS] Text mode stopped.")
+                        break
+                    print(f"JARVIS: {direct_reply}")
+                    continue
+
+                try:
+                    reply = ask_agent(client, heard)
+                    if reply == "__JARVIS_STOP__":
+                        print("[JARVIS] Text mode stopped.")
+                        break
+                    if reply:
+                        print(f"JARVIS: {reply}")
+                except KeyboardInterrupt:
+                    print("\n[JARVIS] Text mode stopped.")
+                    break
+                except Exception as exc:
+                    print(f"[AGENT] {exc}")
+                    print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
+        finally:
+            return
 
     try:
         while True:
