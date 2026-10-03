@@ -182,6 +182,61 @@ def youtube_search():
     return jsonify({"items": videos})
 
 
+@app.post("/api/tts")
+def text_to_speech():
+    """Generate speech with ElevenLabs; the API key stays server-side."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ELEVENLABS_API_KEY belum diatur di Vercel."}), 503
+
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text", "")).strip()
+    if not text:
+        return jsonify({"error": "Teks suara kosong."}), 400
+    if len(text) > 1200:
+        return jsonify({"error": "Teks terlalu panjang untuk satu permintaan TTS."}), 400
+
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+    payload = json.dumps({
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.48,
+            "similarity_boost": 0.78,
+            "style": 0.2,
+            "use_speaker_boost": True
+        }
+    }).encode("utf-8")
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    req = Request(
+        "https://api.elevenlabs.io/v1/text-to-speech/" + voice_id + "?output_format=mp3_44100_128",
+        data=payload,
+        headers={
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg"
+        },
+        method="POST"
+    )
+    try:
+        with urlopen(req, timeout=20) as response:
+            audio_bytes = response.read()
+        return Response(audio_bytes, mimetype="audio/mpeg", headers={
+            "Cache-Control": "no-store"
+        })
+    except HTTPError as error:
+        try:
+            detail = json.loads(error.read().decode("utf-8"))
+            detail = detail.get("detail", {}).get("message") or detail.get("detail", {}).get("status") or "ElevenLabs menolak permintaan."
+        except Exception:
+            detail = "ElevenLabs menolak permintaan."
+        return jsonify({"error": detail}), 502
+    except (URLError, TimeoutError):
+        return jsonify({"error": "Tidak bisa menghubungi layanan ElevenLabs."}), 502
+
+
 @app.post("/api/chat")
 def chat():
     global client, startup_error
