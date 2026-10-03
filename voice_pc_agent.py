@@ -10,6 +10,9 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
+import urllib.error
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -140,6 +143,32 @@ def handle_command(text: str) -> str | None:
     return "Maaf, Sir. Perintah itu belum tersedia. Coba minta buka Notepad, YouTube, folder Downloads, atau cek status PC."
 
 
+def check_for_updates() -> bool:
+    """Download the latest voice agent from GitHub if it changed. Returns True after updating."""
+    url = "https://raw.githubusercontent.com/raaps199-netizen/JARVIS-AI/main/voice_pc_agent.py"
+    local_path = Path(__file__).resolve()
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "JARVIS-PC-Agent"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            latest = response.read().decode("utf-8")
+        current = local_path.read_text(encoding="utf-8")
+        if latest.strip() == current.strip():
+            print("JARVIS sudah versi terbaru.")
+            return False
+        # Save a backup before replacing the script, so a failed update can be recovered.
+        backup_path = local_path.with_name("voice_pc_agent.py.backup")
+        backup_path.write_text(current, encoding="utf-8")
+        temp_path = local_path.with_name("voice_pc_agent.py.update")
+        temp_path.write_text(latest, encoding="utf-8")
+        temp_path.replace(local_path)
+        print("Update JARVIS berhasil. Menyalakan ulang dengan versi terbaru...")
+        subprocess.Popen([sys.executable, str(local_path), "--skip-update"])
+        return True
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeError) as exc:
+        print(f"Update otomatis dilewati (internet tidak tersedia atau GitHub gagal): {exc}")
+        return False
+
+
 def main() -> None:
     if os.name != "nt":
         print("Peringatan: agent ini dirancang untuk Windows.")
@@ -177,4 +206,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if "--skip-update" not in sys.argv and check_for_updates():
+        raise SystemExit(0)
     main()
