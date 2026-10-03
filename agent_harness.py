@@ -921,7 +921,7 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
         return open_app(str(arguments["name"]))
     if name == "browser_search":
         if client is None:
-            return "Browser search is unavailable without an active Groq client."
+            return "Browser search is unavailable because no active vision client is available."
         return browser_search(client, str(arguments["query"]))
     if name == "launch_application":
         return launch_application(str(arguments["name"]))
@@ -972,7 +972,7 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
         return ui_inspect(str(arguments.get("window_title","")))
     if name == "visual_click":
         if client is None:
-            return "Vision is unavailable without an active Groq client."
+            return "Vision is unavailable because no active vision client is available."
         return visual_click(client, str(arguments["target"]), str(arguments.get("button", "left")))
     if name == "see_screen":
         if client is None:
@@ -1581,6 +1581,29 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
         amount=5 if direction in {"bawah","down"} else -5 if direction in {"atas","up"} else 0
         if amount:
             result=scroll_mouse(amount); print(f"[DIRECT] scroll_mouse -> {result}"); return result
+    # Natural page-search typing commands should use the visual search
+    # tool, not generic type_text. This covers phrases such as:
+    # "ketik Arduino Nano di search bar" and "Arduino Nano di search bar".
+    page_search_text = None
+    page_search_suffixes = (
+        " di search bar", " di kolom pencarian",
+        " in the search bar", " in search bar",
+    )
+    for suffix in page_search_suffixes:
+        if normalized.endswith(suffix):
+            candidate = normalized[:-len(suffix)].strip()
+            for prefix in ("ketik ", "ketikkan ", "tulis ", "type ", "search "):
+                if candidate.startswith(prefix):
+                    candidate = candidate[len(prefix):].strip()
+                    break
+            if candidate and candidate not in {"search bar", "kolom pencarian"}:
+                page_search_text = candidate
+            break
+    if page_search_text and client is not None:
+        result = browser_search(client, page_search_text)
+        print(f"[DIRECT] browser_search -> {result}")
+        return result
+
     typing_prefixes = ("ketik ", "tulis ", "ketikkan ")
     original_clean = " ".join(text.strip().split())
     original_lower = original_clean.lower()
