@@ -34,7 +34,7 @@ load_dotenv()
 
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
-VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
+VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
@@ -1373,6 +1373,11 @@ def try_direct_command(text: str, client: Groq | None = None) -> str | None:
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix):].strip()
 
+    site_aliases = {
+        "youtube": "youtube", "yt": "youtube", "google": "google",
+        "github": "github", "chatgpt": "chatgpt",
+    }
+
     app_aliases = {
         "chrome": "chrome",
         "google chrome": "chrome",
@@ -1391,11 +1396,42 @@ def try_direct_command(text: str, client: Groq | None = None) -> str | None:
         "settings": "settings",
     }
 
+    if normalized.startswith("open "):
+        target = normalized[5:].strip()
+        if target in app_aliases:
+            result = open_app(app_aliases[target])
+            print(f"[DIRECT] open_app -> {result}")
+            return result
+        if target in site_aliases:
+            result = open_site(site_aliases[target])
+            print(f"[DIRECT] open_site -> {result}")
+            return result
+
+    if normalized.startswith("launch "):
+        target = normalized[7:].strip()
+        if target in app_aliases:
+            result = open_app(app_aliases[target])
+            print(f"[DIRECT] launch_app -> {result}")
+            return result
+
     if normalized.startswith("buka ") and normalized[5:].strip() in app_aliases:
         app = app_aliases[normalized[5:].strip()]
         result = open_app(app)
         print(f"[DIRECT] open_app -> {result}")
         return result
+
+    # Common English combined browser commands that should not spend an
+    # agent turn when the user explicitly asks for a known site + Google search.
+    if normalized.startswith("open ") and " and search " in normalized:
+        app_part, query = normalized[5:].split(" and search ", 1)
+        app = app_aliases.get(app_part.strip())
+        query = query.strip()
+        if app == "chrome" and query:
+            open_result = open_app("chrome")
+            search_result = search_web(query)
+            result = f"{open_result} {search_result}"
+            print(f"[DIRECT] chrome search -> {result}")
+            return result
 
     # Handle common "buka X lalu/terus/dan cari Y" phrasing without Gemini.
     combined_search_markers = (" lalu cari ", " terus cari ", " dan cari ")
