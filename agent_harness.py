@@ -41,6 +41,7 @@ MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "o
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
+LAST_OPENED_APP = None
 TEXT_MODE = "--text" in sys.argv or os.getenv("JARVIS_TEXT_MODE", "").lower() in {"1", "true", "yes", "on"}
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
@@ -54,7 +55,7 @@ ENERGY_THRESHOLD = 120
 def build_llm_client():
     """Create the configured reasoning/vision client."""
     if LLM_PROVIDER == "ollama":
-        return OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL)
+        return OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL, timeout=30.0, max_retries=0)
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY belum diatur.")
     return Groq(api_key=GROQ_API_KEY)
@@ -203,10 +204,12 @@ TERMINAL_PROCESSES = {
 
 
 def open_app(name: str) -> str:
+    global LAST_OPENED_APP
     if name not in APPS:
         return f"The application {name} is not available."
     try:
         subprocess.Popen(APPS[name], shell=False)
+        LAST_OPENED_APP = name
         return f"Successfully opened {name}."
     except OSError as exc:
         return f"Failed to open {name}: {exc}"
@@ -1509,6 +1512,7 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
         "matikan diri lu", "matikan diri lo", "matikan diri sendiri lu",
         "matikan diri sendiri lo", "stop jarvis", "shutdown jarvis",
         "matikan diri sendiri", "matikan jervis", "matikan yervis", "matikan surface",
+        "stop", "berhenti", "berhenti mendengarkan",
     }
     if normalized in stop_phrases:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
@@ -1605,12 +1609,23 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
     close_target = normalized[6:].strip() if normalized.startswith("tutup ") else ""
     if close_target.endswith("nya"):
         close_target = close_target[:-3].strip()
+    # Natural close commands such as "tutup dia" / "close it" refer to the
+    # most recently opened known app when one is available.
+    pronoun_close = {
+        "tutup dia", "tutup itu", "tutup yang itu", "tutup yg itu",
+        "close it", "close that", "close that app", "close the app",
+    }
+    global LAST_OPENED_APP
+    if normalized in pronoun_close and LAST_OPENED_APP:
+        result = close_app(LAST_OPENED_APP)
+        print(f"[DIRECT] close_app(last_opened={LAST_OPENED_APP}) -> {result}")
+        return result
     if close_target in close_aliases:
         app = close_aliases[close_target]
         result = close_app(app)
         print(f"[DIRECT] close_app({app}) -> {result}")
         return result
-    if normalized in {"tutup", "tutup jendela", "tutup aplikasi"}:
+    if normalized in {"tutup", "tutup jendela", "tutup aplikasi", "close", "close window", "close application"}:
         result = close_active_window()
         print(f"[DIRECT] close_active_window -> {result}")
         return result
@@ -1783,7 +1798,7 @@ def main() -> None:
 
                 if not heard:
                     continue
-                if heard.lower().strip() in {"/exit", "/quit", "exit", "quit"}:
+                if heard.lower().strip() in {"/exit", "/quit", "/stop", "exit", "quit"}:
                     print("[JARVIS] Text mode stopped.")
                     break
 
