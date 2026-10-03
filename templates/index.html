@@ -520,8 +520,8 @@ const SpeechRecognition=window.SpeechRecognition || window.webkitSpeechRecogniti
 if(SpeechRecognition){
   recognition=new SpeechRecognition();
   recognition.lang="id-ID";
-  recognition.continuous=true;
-  recognition.interimResults=true;
+  recognition.continuous=false;
+  recognition.interimResults=false;
 
   recognition.onstart=()=>{
     isStartingRecognition=false;
@@ -534,19 +534,13 @@ if(SpeechRecognition){
   };
 
   recognition.onresult=event=>{
-    let interimTranscript="";
-
-    for(let i=event.resultIndex;i<event.results.length;i++){
-      const transcript=event.results[i][0].transcript;
-
-      if(event.results[i].isFinal){
-        finalTranscript += transcript + " ";
-      }else{
-        interimTranscript += transcript;
-      }
+    // Satu klik = satu hasil ucapan. Jangan gabungkan ulang semua hasil lama
+    // karena beberapa browser Android mengirim ulang result yang sudah final.
+    const result=event.results[event.resultIndex];
+    if(result && result.isFinal){
+      finalTranscript=result[0].transcript.trim();
+      input.value=finalTranscript;
     }
-
-    input.value=(finalTranscript+interimTranscript).trim();
   };
 
   recognition.onerror=event=>{
