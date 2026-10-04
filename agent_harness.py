@@ -37,7 +37,8 @@ load_dotenv()
 LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "ollama").strip().lower()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b").strip()
-OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
 MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
@@ -56,7 +57,7 @@ ENERGY_THRESHOLD = 120
 def build_llm_client():
     """Create the configured reasoning/vision client."""
     if LLM_PROVIDER == "ollama":
-        return OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL, timeout=30.0, max_retries=0)
+        return OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL, timeout=OLLAMA_TIMEOUT_SECONDS, max_retries=0)
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY belum diatur.")
     return Groq(api_key=GROQ_API_KEY)
@@ -1230,27 +1231,97 @@ def request_confirmation(description: str) -> bool:
     return answer in {"y", "yes", "approve", "approved", "iya", "ya", "lanjut", "boleh"}
 
 
+
+def _is_light_write_request(user_text: str) -> bool:
+    """Recognize simple content-generation requests that only need generated text + typing."""
+    normalized = " ".join(user_text.lower().strip().split())
+    write_words = ("tulis ", "ketik ", "ketikkan ", "write ", "type ")
+    destination_words = ("di notepad", "ke notepad", "in notepad", "into notepad")
+    return normalized.startswith(write_words) and any(word in normalized for word in destination_words)
+
+
+def _extract_write_instruction(user_text: str) -> str:
+    normalized = " ".join(user_text.strip().split())
+    lowered = normalized.lower()
+    for prefix in ("tulis ", "ketik ", "ketikkan ", "write ", "type "):
+        if lowered.startswith(prefix):
+            instruction = normalized[len(prefix):].strip()
+            for suffix in (" di notepad", " ke notepad", " in notepad", " into notepad"):
+                if instruction.lower().endswith(suffix):
+                    instruction = instruction[:-len(suffix)].strip()
+                    break
+            return instruction
+    return normalized
+
+
+def _light_generate_and_type(client: Any, user_text: str) -> str:
+    """Generate short text without screenshots or the full desktop tool payload."""
+    instruction = _extract_write_instruction(user_text)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are JARVIS's fast writing module. Generate only the text the user "
+                "asked to write. Do not explain your process. Do not use markdown unless "
+                "the user asks for it. Keep ordinary requests concise."
+            ),
+        },
+        {
+            "role": "user",
+            "content": instruction,
+        },
+    ]
+    response = chat_create(
+        client,
+        model=MODEL,
+        messages=messages,
+        temperature=0.4,
+        max_tokens=180,
+    )
+    generated = (response.choices[0].message.content or "").strip()
+    if not generated:
+        return "I could not generate the requested text."
+    result = type_text(generated)
+    print(f"[LIGHT] generated text -> {result}")
+    return result
+
+
 def ask_agent(client: Any, user_text: str) -> str:
-    # Give the local multimodal model current desktop context with every natural
-    # language request. This is an on-demand screenshot, not a hidden background
-    # recording or webcam capture.
+    # Keep simple writing requests on a lightweight path. This avoids sending a
+    # screenshot and the full desktop tool catalog when all JARVIS needs to do is
+    # generate text and type it into Notepad.
+    if _is_light_write_request(user_text):
+        return _light_generate_and_type(client, user_text)
+
+    # Screenshots are expensive on a small local model, so capture one only when
+    # the request actually depends on visual desktop context.
+    normalized_request = " ".join(user_text.lower().strip().split())
+    visual_hints = (
+        "lihat", "baca layar", "lihat layar", "cek layar", "di layar",
+        "yang kedua", "yang ketiga", "yang pertama", "tombol", "button",
+        "video", "card", "ikon", "icon", "di sebelah", "atas kanan",
+        "bawah kiri", "on screen", "screen", "what is on",
+    )
+    needs_screen = any(hint in normalized_request for hint in visual_hints)
+
     user_content: Any = user_text
-    try:
-        shot = pyautogui.screenshot()
-        from io import BytesIO
-        buf = BytesIO()
-        shot.convert("RGB").save(buf, format="JPEG", quality=72)
-        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
-        user_content = [
-            {"type": "text", "text": (
-                "Current desktop screenshot follows. Use it as context for the user's "
-                "request. Do not describe the screenshot unless relevant. User request: "
-                + user_text
-            )},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
-        ]
-    except Exception as exc:
-        print(f"[SCREEN] Could not attach desktop context: {exc}")
+    if needs_screen:
+        try:
+            shot = pyautogui.screenshot()
+            from io import BytesIO
+            buf = BytesIO()
+            shot.convert("RGB").save(buf, format="JPEG", quality=65)
+            encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+            user_content = [
+                {"type": "text", "text": (
+                    "Current desktop screenshot follows. Use it as context for the user's "
+                    "request. Do not describe the screenshot unless relevant. User request: "
+                    + user_text
+                )},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+            ]
+        except Exception as exc:
+            print(f"[SCREEN] Could not attach desktop context: {exc}")
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
