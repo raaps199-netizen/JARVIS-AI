@@ -1331,36 +1331,6 @@ def ask_agent(client: Any, user_text: str) -> str:
         {"role": "user", "content": user_content},
     ]
 
-    # Safety/precision guard: if the user explicitly names an approved app
-    # together with "tutup", never let the LLM fall back to Alt+F4. Alt+F4 on
-    # the desktop can open Windows' Shut Down dialog, which is not wanted when
-    # closing a named application.
-    normalized_request = " ".join(user_text.lower().strip().split())
-    close_words = ("tutup ", "tutupkan ", "close ")
-    close_app_aliases = {
-        "kalkulator": "calculator",
-        "calculator": "calculator",
-        "notepad": "notepad",
-        "chrome": "chrome",
-        "google chrome": "chrome",
-        "word": "word",
-        "microsoft word": "word",
-        "vscode": "vscode",
-        "vs code": "vscode",
-        "explorer": "explorer",
-        "task manager": "task manager",
-    }
-    for prefix in close_words:
-        if normalized_request.startswith(prefix):
-            target_text = normalized_request[len(prefix):].strip()
-            if target_text.endswith("nya"):
-                target_text = target_text[:-3].strip()
-            target_app = close_app_aliases.get(target_text)
-            if target_app:
-                result = close_app(target_app)
-                print(f"[DIRECT] close_app({target_app}) -> {result}")
-                return result
-
     for _ in range(6):
         response = chat_create(client, 
             model=MODEL,
