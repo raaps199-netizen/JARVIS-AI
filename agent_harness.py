@@ -1379,6 +1379,7 @@ def ask_agent(client: Any, user_text: str) -> str:
                 _remember_agent_event("assistant", result)
                 return result
 
+    _remember_agent_event("user", user_text)
     tools = _select_agent_tools(user_text)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(AGENT_HISTORY[-6:])
@@ -1519,7 +1520,6 @@ def ask_agent(client: Any, user_text: str) -> str:
                     "tool_name": tool_name,
                     "content": str(result),
                 })
-                _remember_agent_event("tool", f"{tool_name}: {str(result)[:500]}")
             except Exception as exc:
                 result = f"Tool error: {exc}"
                 print(f"[TOOL] {tool_name} -> {result}")
