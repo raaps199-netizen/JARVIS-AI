@@ -117,6 +117,17 @@ For an obvious single action, make one tool call immediately. Choose the smalles
 appropriate tool: open_app/open_site/open_url, close_app, type_text, press_key/hotkey,
 scroll_mouse, word_control, or other matching tool.
 
+If the user's request is a contextual action inside the currently active application,
+do NOT reopen or relaunch that application unless the user explicitly asks to open or
+launch it. Use the current desktop context to decide whether the requested app is already
+active.
+
+For multi-step requests, when the next actions are predictable and safe after the earlier
+action succeeds, emit the complete sequence as multiple function calls in the same model
+response, in execution order. This lets the local executor perform the sequence without
+an unnecessary model round-trip. Do not do this when a later step genuinely requires
+new visual/UI information that only becomes available after the earlier action.
+
 For contextual or visual tasks, use Computer Use. Prefer the Win-Mind UI Automation tools ui_tree/ui_map/ui_act/ui_read/ui_focused/ui_find_text for accessible UI;
 use the older ui_inspect only as a fallback. Use see_screen/visual_click when spatial or pixel information is needed. Complete
 multi-step tasks and verify meaningful actions when practical. Never claim success
@@ -1519,6 +1530,33 @@ def ask_agent(client: Any, user_text: str) -> str:
                 "call_id": step.id,
                 "result": [{"type": "text", "text": str(result)}],
             })
+
+        # Most desktop actions are deterministic and already return a concrete
+        # success/failure result. Do not spend another Gemini round-trip merely
+        # asking the model to paraphrase that result. A follow-up is still required
+        # for observation tools whose output must be interpreted before the next step.
+        no_followup_tools = {
+            "open_app", "open_site", "open_url", "open_folder", "open_path",
+            "type_text", "press_key", "hotkey", "scroll_mouse", "click_at",
+            "double_click_at", "move_mouse", "drag_mouse", "ui_click",
+            "word_control", "close_app", "close_active_window",
+        }
+        all_calls_are_terminal = (
+            bool(function_calls)
+            and all(str(step.name) in no_followup_tools for step in function_calls)
+        )
+        if all_calls_are_terminal:
+            successful = [
+                str(item["result"][0]["text"])
+                for item in results
+                if item.get("result")
+            ]
+            if len(successful) == 1:
+                reply = successful[0]
+            else:
+                reply = "Done, Sir. " + " ".join(successful)
+            _remember_turn(user_text, reply)
+            return reply
 
         round_started = time.perf_counter()
         interaction = client.interactions.create(
