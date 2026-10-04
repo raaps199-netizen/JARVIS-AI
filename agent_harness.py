@@ -59,7 +59,7 @@ OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m").strip()
 MODEL = GEMINI_MODEL if LLM_PROVIDER == "gemini" else (GROQ_AGENT_MODEL if LLM_PROVIDER == "groq" else OLLAMA_MODEL)
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 STT_LANGUAGE = os.getenv("GROQ_STT_LANGUAGE", "").strip() or None
-STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "Computer commands in Indonesian or English. Keep app and site names exactly: YouTube, Chrome, Word, Notepad, VS Code, Google, GitHub.")
+STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "You are transcribing spoken computer commands in Indonesian or English. Preserve exact app/site names. Chrome means the Google Chrome browser and must be transcribed as Chrome, not cron, crown, chrome. Other exact names: YouTube, Word, Notepad, VS Code, Google, GitHub. Do not invent shutdown commands.")
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 VISION_CLIENT = None
@@ -101,7 +101,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 MIN_RECORD_SECONDS = 0.35
-SILENCE_SECONDS = 0.35
+SILENCE_SECONDS = 0.80
 UI_DELAY_SECONDS = 0.8
 START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
@@ -1831,7 +1831,7 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
         return "__JARVIS_STOP__"
 
     words = set(normalized.split())
-    if words & stop_words and words & stop_targets:
+    if words & stop_words and words & stop_targets and len(words) <= 4:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
         return "__JARVIS_STOP__"
 
@@ -2203,18 +2203,9 @@ def main() -> None:
                 "kalkulator", "calculator", "notepad", "chrome", "word",
                 "vscode", "explorer", "aplikasi", "jendela"
             })
-            shutdown_intent = (
-                normalized in shutdown_phrases
-                or (
-                    not has_app_target
-                    and ("matikan" in shutdown_words)
-                    and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"})
-                )
-                or normalized.startswith("matikan diri")
-                or normalized.startswith("stop jarvis")
-                or normalized.startswith("stop jervis")
-                or normalized.startswith("stop yervis")
-            )
+            # Shutdown must be an explicit, unambiguous command. Never infer it
+            # from a loose prefix because STT can mishear ordinary app names.
+            shutdown_intent = normalized in shutdown_phrases
 
             if shutdown_intent:
                 print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
