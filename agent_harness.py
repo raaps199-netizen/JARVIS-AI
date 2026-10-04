@@ -1807,6 +1807,11 @@ def main() -> None:
     if not TEXT_MODE and not GROQ_API_KEY:
         print("GROQ_API_KEY belum diatur. Voice mode saat ini memakai Groq hanya untuk STT.")
         return
+
+    # Voice STT runs in the parent so microphone capture and transcription remain
+    # responsive while the persistent worker owns the Gemini reasoning client.
+    stt_client = Groq(api_key=GROQ_API_KEY) if not TEXT_MODE else None
+
     if not TEXT_MODE:
         speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
@@ -1935,7 +1940,7 @@ def main() -> None:
                 speak("Understood, Sir. Shutting down the JARVIS system.")
                 return
 
-            direct_reply = try_direct_command(heard, llm_client)
+            direct_reply = try_direct_command(heard, None)
             if direct_reply == "__JARVIS_STOP__":
                 print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
                 speak("Understood, Sir. Shutting down the JARVIS system.")
