@@ -4,3 +4,4 @@ python-dotenv
 pywinauto
 pywin32
 google-genai
+comtypes>=1.2
