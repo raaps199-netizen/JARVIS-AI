@@ -1536,7 +1536,7 @@ def run_agent_interruptible(user_text: str, text_mode: bool) -> str:
         while worker.is_alive():
             if msvcrt.kbhit():
                 key = msvcrt.getwch()
-                if key == "\\x1b":
+                if key == "\x1b":
                     print("\n[AGENT] ESC detected. Force-stopping the current request...")
                     worker.terminate()
                     worker.join(timeout=1.5)
