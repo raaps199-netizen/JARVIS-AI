@@ -1451,49 +1451,65 @@ def _execute_agent_tool(tool_name: str, arguments: dict[str, Any], client: Any) 
 
 def _select_tools_for_query(query: str, top_n: int = 10) -> list[dict[str, Any]]:
     """Select a compact relevant tool set while preserving each provider's tool schema."""
-    # Groq/OpenAI Chat Completions expects:
-    #   {"type":"function","function":{"name":...,"parameters":...}}
-    # Gemini Interactions expects the flattened function declaration.
-    # Do not feed Gemini's schema to Groq, or Groq rejects it before inference.
+    # Groq/OpenAI Chat Completions:
+    #   {"type":"function","function":{"name":...,"description":...,"parameters":...}}
+    # Gemini Interactions:
+    #   {"name":...,"description":...,"parameters":...}
     declarations = _gemini_tool_declarations() if LLM_PROVIDER == "gemini" else TOOL_DECLARATIONS
     if len(declarations) <= top_n:
         return declarations
+
+    def tool_name(declaration: dict[str, Any]) -> str:
+        function = declaration.get("function")
+        if isinstance(function, dict):
+            return str(function.get("name", ""))
+        return str(declaration.get("name", ""))
+
+    def tool_description(declaration: dict[str, Any]) -> str:
+        function = declaration.get("function")
+        if isinstance(function, dict):
+            return str(function.get("description", ""))
+        return str(declaration.get("description", ""))
+
+    def tool_parameters(declaration: dict[str, Any]) -> dict[str, Any]:
+        function = declaration.get("function")
+        if isinstance(function, dict):
+            parameters = function.get("parameters", {})
+        else:
+            parameters = declaration.get("parameters", {})
+        return parameters if isinstance(parameters, dict) else {}
 
     def tokens(text: str) -> set[str]:
         return {x for x in __import__("re").findall(r"[a-zA-Z0-9_]{2,}", text.lower())}
 
     q = tokens(query)
-    docs = []
-    for declaration in declarations:
-        blob = " ".join([
-            str(declaration.get("name", "")),
-            str(declaration.get("description", "")),
-            json.dumps(declaration.get("parameters", {}), ensure_ascii=False),
-        ])
-        docs.append(tokens(blob))
-
     scores = []
-    for i, doc in enumerate(docs):
-        scores.append((len(q & doc), i))
+    for i, declaration in enumerate(declarations):
+        blob = " ".join([
+            tool_name(declaration),
+            tool_description(declaration),
+            json.dumps(tool_parameters(declaration), ensure_ascii=False),
+        ])
+        scores.append((len(q & tokens(blob)), i))
 
     # Keep the proven semantic safety net. Relevance scoring fills the remaining slots.
     # This is semantic tool routing, not phrase-specific command matching.
-    # Deterministic desktop primitives stay available so the model can choose them
-    # instead of being forced through a visual fallback.
-    # Observation/vision tools are selected by relevance instead of competing with
-    # deterministic actions such as close_app.
     core = {
         "open_app", "open_site", "open_url", "type_text", "press_key",
         "close_app", "close_active_window", "ui_act",
     }
-    selected = {i for i, d in enumerate(declarations) if d.get("name") in core}
+    selected = {
+        i for i, declaration in enumerate(declarations)
+        if tool_name(declaration) in core
+    }
+
     for _score, i in sorted(scores, reverse=True):
         if len(selected) >= top_n:
             break
         selected.add(i)
 
     chosen = [declarations[i] for i in sorted(selected)]
-    print(f"[TOOLS] {len(declarations)} -> {len(chosen)}: {', '.join(x['name'] for x in chosen)}")
+    print(f"[TOOLS] {len(declarations)} -> {len(chosen)}: {', '.join(tool_name(x) for x in chosen)}")
     return chosen
 
 def _agent_input_with_memory(user_text: str) -> str:
