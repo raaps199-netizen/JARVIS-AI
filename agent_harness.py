@@ -22,6 +22,7 @@ from pywinauto import Desktop
 import win32com.client
 from urllib.parse import quote_plus
 from pathlib import Path
+from urllib import request as urllib_request
 from typing import Any
 
 import sounddevice as sd
@@ -39,6 +40,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").stri
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b").strip()
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
+OLLAMA_NATIVE_BASE_URL = os.getenv("OLLAMA_NATIVE_BASE_URL", "http://localhost:11434").strip().rstrip("/")
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip()
 MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
@@ -1254,6 +1257,40 @@ def _extract_write_instruction(user_text: str) -> str:
     return normalized
 
 
+def _ollama_native_chat(messages: list[dict[str, str]], *, num_predict: int = 180, temperature: float = 0.4) -> str:
+    """Use Ollama's native API for small local generations.
+
+    Native /api/chat reliably supports think=false, keep_alive, and num_ctx without
+    routing the request through the OpenAI compatibility layer.
+    """
+    if LLM_PROVIDER != "ollama":
+        raise RuntimeError("Native Ollama chat is only available with the Ollama provider.")
+
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "options": {
+            "num_ctx": OLLAMA_NUM_CTX,
+            "temperature": temperature,
+            "num_predict": num_predict,
+        },
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(
+        f"{OLLAMA_NATIVE_BASE_URL}/api/chat",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib_request.urlopen(req, timeout=OLLAMA_TIMEOUT_SECONDS) as response:
+        result = json.loads(response.read().decode("utf-8"))
+
+    return str(result.get("message", {}).get("content", "") or "").strip()
+
+
 def _light_generate_and_type(client: Any, user_text: str) -> str:
     """Generate short text without screenshots or the full desktop tool payload."""
     instruction = _extract_write_instruction(user_text)
@@ -1271,14 +1308,7 @@ def _light_generate_and_type(client: Any, user_text: str) -> str:
             "content": instruction,
         },
     ]
-    response = chat_create(
-        client,
-        model=MODEL,
-        messages=messages,
-        temperature=0.4,
-        max_tokens=180,
-    )
-    generated = (response.choices[0].message.content or "").strip()
+    generated = _ollama_native_chat(messages, num_predict=180, temperature=0.4)
     if not generated:
         return "I could not generate the requested text."
     result = type_text(generated)
