@@ -497,8 +497,7 @@ def hotkey(keys: str) -> str:
 
 
 def _foreground_process_name() -> str:
-    if os.name != "nt":        return ""
-    import ctypes
+    if os.name != "nt":        return ""    import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
     hwnd = user32.GetForegroundWindow()
@@ -997,8 +996,7 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
             int(arguments["end_x"]),
             int(arguments["end_y"]),
             float(arguments.get("duration", 0.5)),        )
-    if name == "pc_status":
-        return pc_status()
+    if name == "pc_status":        return pc_status()
     if name == "close_active_window":
         return close_active_window()
     if name == "close_app":
@@ -1497,8 +1495,7 @@ def ask_agent(client: Any, user_text: str) -> str:
                     )
                 else:                    result = run_tool(tool_name, arguments, client)
 
-                if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):
-                    description = result.split(":", 1)[1].strip()
+                if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):                    description = result.split(":", 1)[1].strip()
                     approval = request_confirmation(description)
                     if not approval:
                         result = "The user denied the high-impact action."
@@ -1932,7 +1929,8 @@ def main() -> None:
     try:
         while True:
             try:
-                record_audio(audio_path)                text = transcribe(stt_client, audio_path)
+                record_audio(audio_path)
+                text = transcribe(stt_client, audio_path)
                 if not text:
                     continue
 
