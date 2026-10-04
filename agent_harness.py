@@ -102,77 +102,30 @@ def chat_create(client: Any, **kwargs):
 
 
 SYSTEM_PROMPT = """
-You are JARVIS, a local Windows desktop AI assistant.
+You are JARVIS, a Windows desktop AI agent.
 
-ALWAYS answer in English. The user may speak Indonesian or mixed Indonesian/English,
-but your spoken and written replies must remain in natural English. Do not translate
-the user's request into Indonesian unless explicitly asked. Understand Indonesian
-commands normally and execute them as requested. Use natural English and address the
-user as "Sir" occasionally, not every sentence.
+Understand Indonesian, English, and mixed-language requests semantically. Do not use
+phrase-specific rules or require exact wording.
 
-You are an agent, not a phrase-based command parser. Understand the user's intent
-semantically from natural Indonesian, English, or mixed language. The exact wording
-does not matter. "make it bold", "tebelin tulisan", "ubah jadi tebal", and similar
-requests should resolve to the same intended desktop action without requiring a
-hard-coded phrase dictionary.
+For an obvious single action, make one tool call immediately. Choose the smallest
+appropriate tool: open_app/open_site/open_url, close_app, type_text, press_key/hotkey,
+scroll_mouse, word_control, or other matching tool.
 
-For simple, unambiguous requests, act immediately with the smallest appropriate tool
-call. Do not spend multiple reasoning turns on a single obvious action. Examples:
-formatting selected text -> press the appropriate shortcut or use Word control;
-opening an app -> open_app/launch_application; typing -> type_text; scrolling ->
-scroll_mouse; closing a named app -> close_app. Choose the tool from intent, not from
-an exact command phrase.
+For contextual or visual tasks, use Computer Use. Prefer ui_inspect for accessible UI;
+use see_screen/visual_click when spatial or pixel information is needed. Complete
+multi-step tasks and verify meaningful actions when practical. Never claim success
+without a successful tool result.
 
-For contextual or visual requests, use Computer Use: inspect the UI/accessibility
-state first when it can represent the target, then use see_screen/visual_click when
-pixels or spatial context are required. After a meaningful action, verify when needed.
-Continue multi-step tasks until the requested outcome is actually achieved. Do not
-claim success without a successful tool result.
+When Word is active, use word_control for Word-specific editing, formatting,
+selection, tables, reading, and saving.
 
-You have broad control over the user's Windows desktop through the tools below.
-Decide yourself which tools and sequence are needed to complete the user's request.
-Actually perform the requested desktop work and verify the result when practical.
-Do not claim an action happened unless its tool result says it succeeded. Use only
-the exact tool names provided in the tool list.
+High-impact, destructive, security-sensitive, externally consequential, or dangerous
+actions require the existing approval mechanism. Never bypass it. Never retrieve
+passwords, tokens, cookies, private keys, or credential stores. Webcam use requires
+explicit user request.
 
-You may open applications by name, open arbitrary URLs, open files and folders,
-inspect visible UI, click by text or coordinates, move and drag the mouse, scroll,
-type text, press keyboard shortcuts, read ordinary user files, create/edit/rename/
-move/delete files, and operate Microsoft Word deeply. You may chain many tool calls
-to complete a multi-step task.
-
-When the user asks to search using a search field inside the current webpage, use browser_search. Do not substitute the Google search_web tool, and do not use the browser address bar when a page search field is explicitly requested.
-
-When the user refers to a visual or positional target such as "the second video",
-"the third card", "the button on the top right", or "the play icon", use the
-visual_click tool so the current screen is analyzed before the click. Do not rely
-on ui_click for repeated visual items that do not have unique accessible text.
-
-WORD HAS DEEP CONTROL: When Microsoft Word is active and the user asks to write,
-format, edit, select, style, align, change font/size, insert tables, read the
-current document, or save the document, use the Word tools below instead of
-pretending that generic typing is enough. You may use Word's COM automation to
-operate the active document and its selection. Preserve the user's intended
-content.
-
-HIGH-IMPACT ACTIONS: JARVIS will ask the user for approval immediately before
-destructive, irreversible, externally consequential, security-sensitive, or
-potentially dangerous actions. This includes deleting or overwriting data,
-moving/renaming data when it could cause loss, typing commands into a terminal,
-installing/uninstalling software, changing security settings, shutting down or
-restarting Windows, publishing/sending/purchasing, or clicking controls clearly
-labeled Delete, Remove, Reset, Format, Shutdown, Restart, Send, Publish, Buy,
-Purchase, Install, Uninstall, or similar. Do not try to bypass this approval.
-Normal desktop actions such as opening apps, browsing, reading ordinary files,
-typing into documents, and clicking ordinary UI controls do not require approval.
-
-Never retrieve passwords, authentication tokens, private keys, browser cookies,
-or other credential stores. Do not use the webcam unless the user explicitly
-asks. Treat the user's request as authorization for ordinary desktop work, but
-not as permission to bypass the approval step for high-impact actions.
-
-Keep spoken answers concise. If the user asks a normal knowledge question,
-answer it directly without calling a PC tool.
+Reply in concise natural English and occasionally address the user as "Sir".
+For normal knowledge questions, answer directly without PC tools.
 """
 
 APPS = {
@@ -497,8 +450,7 @@ def _perform_confirmed_rename(source: str, new_name: str) -> str:
 
 def _perform_confirmed_move(source: str, destination: str) -> str:
     import shutil as _shutil
-    src = Path(os.path.expandvars(os.path.expanduser(str(source).strip()))).resolve()
-    dst = Path(os.path.expandvars(os.path.expanduser(str(destination).strip()))).resolve()
+    src = Path(os.path.expandvars(os.path.expanduser(str(source).strip()))).resolve()    dst = Path(os.path.expandvars(os.path.expanduser(str(destination).strip()))).resolve()
     try:
         final = dst / src.name if dst.exists() and dst.is_dir() else dst
         _shutil.move(str(src), str(final))
@@ -997,8 +949,7 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
     if name == "write_file":
         return write_file(str(arguments["path"]), str(arguments["content"]))
     if name == "create_folder":
-        return create_folder(str(arguments["path"]))
-    if name == "rename_path":
+        return create_folder(str(arguments["path"]))    if name == "rename_path":
         return rename_path(str(arguments["path"]), str(arguments["new_name"]))
     if name == "move_path":
         return move_path(str(arguments["source"]), str(arguments["destination"]))
@@ -1359,6 +1310,7 @@ def ask_agent(client: Any, user_text: str) -> str:
 
     tools = _gemini_tool_declarations()
     generation_config = {"thinking_level": GEMINI_THINKING_LEVEL}
+    agent_started = time.perf_counter()
     interaction = client.interactions.create(
         model=GEMINI_MODEL,
         system_instruction=SYSTEM_PROMPT,
@@ -1366,6 +1318,7 @@ def ask_agent(client: Any, user_text: str) -> str:
         tools=tools,
         generation_config=generation_config,
     )
+    print(f"[LATENCY] Gemini initial: {(time.perf_counter() - agent_started) * 1000:.0f} ms")
 
     for _ in range(6):
         function_calls = [step for step in interaction.steps if step.type == "function_call"]
@@ -1376,7 +1329,9 @@ def ask_agent(client: Any, user_text: str) -> str:
         for step in function_calls:
             tool_name = str(step.name)
             arguments = step.arguments if isinstance(step.arguments, dict) else json.loads(step.arguments or "{}")
+            tool_started = time.perf_counter()
             result = _execute_agent_tool(tool_name, arguments, client)
+            print(f"[LATENCY] Tool {tool_name}: {(time.perf_counter() - tool_started) * 1000:.0f} ms")
             print(f"[TOOL] {tool_name} -> {result}")
 
             if result == "__JARVIS_STOP__":
@@ -1392,6 +1347,7 @@ def ask_agent(client: Any, user_text: str) -> str:
                 "result": [{"type": "text", "text": str(result)}],
             })
 
+        round_started = time.perf_counter()
         interaction = client.interactions.create(
             model=GEMINI_MODEL,
             previous_interaction_id=interaction.id,
@@ -1400,6 +1356,7 @@ def ask_agent(client: Any, user_text: str) -> str:
             tools=tools,
             generation_config=generation_config,
         )
+        print(f"[LATENCY] Gemini follow-up: {(time.perf_counter() - round_started) * 1000:.0f} ms")
 
     return "I stopped after several tool steps to avoid an infinite loop."
 
@@ -1497,8 +1454,7 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
 
     JARVIS should understand natural language semantically and choose the appropriate
     Computer Use tool. This function only preserves the explicit stop command because
-    stopping the assistant is control-flow, not a desktop action.
-    """
+    stopping the assistant is control-flow, not a desktop action.    """
     normalized = " ".join(text.lower().strip().split()).strip(".,!?;:")
 
     stop_words = {"stop", "berhenti"}
