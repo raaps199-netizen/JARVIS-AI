@@ -12,6 +12,8 @@ import platform
 import shutil
 import sys
 import subprocess
+import multiprocessing
+import msvcrt
 import time
 import wave
 import webbrowser
@@ -1483,6 +1485,97 @@ def confirm_action_via_voice(client: Any, description: str) -> bool:
     return False
 
 
+def _agent_worker(user_text: str, text_mode: bool, result_conn) -> None:
+    """Run one agent request in an isolated process so the parent can kill it instantly."""
+    try:
+        client = build_llm_client()
+
+        global CONFIRMATION_CALLBACK
+        if text_mode:
+            CONFIRMATION_CALLBACK = lambda description: confirm_action_via_text(description)
+        else:
+            if not GROQ_API_KEY:
+                raise RuntimeError("GROQ_API_KEY belum diatur.")
+            worker_stt_client = Groq(api_key=GROQ_API_KEY)
+            CONFIRMATION_CALLBACK = lambda description: confirm_action_via_voice(
+                worker_stt_client, description
+            )
+
+        reply = ask_agent(client, user_text)
+        result_conn.send(("ok", reply))
+    except BaseException as exc:
+        try:
+            result_conn.send(("error", f"{type(exc).__name__}: {exc}"))
+        except Exception:
+            pass
+    finally:
+        try:
+            result_conn.close()
+        except Exception:
+            pass
+
+
+def run_agent_interruptible(user_text: str, text_mode: bool) -> str:
+    """Run the agent in a killable worker process.
+
+    Press Esc while JARVIS is processing to terminate the current request immediately.
+    This is intentionally a process boundary because a blocked HTTP/Ollama call cannot
+    be reliably cancelled from the same Python thread.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    worker = ctx.Process(
+        target=_agent_worker,
+        args=(user_text, text_mode, child_conn),
+        daemon=True,
+    )
+    worker.start()
+    child_conn.close()
+
+    try:
+        while worker.is_alive():
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+                if key == "\\x1b":
+                    print("\n[AGENT] ESC detected. Force-stopping the current request...")
+                    worker.terminate()
+                    worker.join(timeout=1.5)
+                    if worker.is_alive():
+                        worker.kill()
+                        worker.join(timeout=1)
+                    return "__JARVIS_CANCELLED__"
+            time.sleep(0.05)
+
+        if parent_conn.poll(0.2):
+            status, payload = parent_conn.recv()
+            if status == "ok":
+                return payload
+            return f"__JARVIS_ERROR__:{payload}"
+
+        if worker.exitcode not in (0, None):
+            return f"__JARVIS_ERROR__:agent worker exited with code {worker.exitcode}"
+
+        return ""
+    except KeyboardInterrupt:
+        print("\n[AGENT] Keyboard interrupt. Force-stopping the current request...")
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=1.5)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=1)
+        return "__JARVIS_CANCELLED__"
+    finally:
+        try:
+            parent_conn.close()
+        except Exception:
+            pass
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=1)
+
+
+
 def main() -> None:
     try:
         llm_client = build_llm_client()
@@ -1542,10 +1635,17 @@ def main() -> None:
                 break
 
             try:
-                reply = ask_agent(llm_client, heard)
+                reply = run_agent_interruptible(heard, TEXT_MODE)
                 if reply == "__JARVIS_STOP__":
                     print("[JARVIS] Text mode stopped.")
                     break
+                if reply == "__JARVIS_CANCELLED__":
+                    print("JARVIS: Request cancelled, Sir.")
+                    continue
+                if reply.startswith("__JARVIS_ERROR__:"):
+                    print(f"[AGENT] {reply}")
+                    print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
+                    continue
                 if reply:
                     print(f"JARVIS: {reply}")
             except KeyboardInterrupt:
@@ -1628,10 +1728,17 @@ def main() -> None:
                 return
 
             try:
-                reply = ask_agent(llm_client, heard)
+                reply = run_agent_interruptible(heard, TEXT_MODE)
                 if reply == "__JARVIS_STOP__":
                     speak("Understood, Sir. Shutting down the JARVIS system.")
                     break
+                if reply == "__JARVIS_CANCELLED__":
+                    speak("Cancelled, Sir.")
+                    continue
+                if reply.startswith("__JARVIS_ERROR__:"):
+                    print(f"[AGENT] {reply}")
+                    speak("I could not process that request, Sir.")
+                    continue
                 if reply:
                     speak(reply)
             except KeyboardInterrupt:
