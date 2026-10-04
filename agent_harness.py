@@ -1881,54 +1881,53 @@ def main() -> None:
     if TEXT_MODE:
         print(f"JARVIS text mode online, Sir. LLM: {LLM_PROVIDER}/{MODEL}")
         print("JARVIS text mode online, Sir. Type commands; use /exit to quit.")
-        try:
-            while True:
-                try:
-                    heard = input("Sir> ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    print("\n[JARVIS] Text mode stopped.")
-                    break
+        while True:
+            try:
+                heard = input("Sir> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[JARVIS] Text mode stopped.")
+                break
 
-                if not heard:
-                    continue
-                if heard.lower().strip() in {"/exit", "/quit", "/stop", "exit", "quit"}:
+            if not heard:
+                continue
+            if heard.lower().strip() in {"/exit", "/quit", "/stop", "exit", "quit"}:
+                print("[JARVIS] Text mode stopped.")
+                break
+
+            normalized = " ".join(heard.lower().strip().split())
+            normalized = normalized.strip(".,!?;:")
+
+            shutdown_phrases = {
+                "shutdown jarvis", "matikan jarvis", "matikan diri",
+                "matikan diri sendiri", "matikan dirimu", "stop jarvis",
+            }
+            shutdown_intent = normalized in shutdown_phrases
+            if shutdown_intent:
+                print("[JARVIS] Shutdown command received.")
+                print("JARVIS: Understood, Sir. Shutting down the JARVIS system.")
+                break
+
+            direct_reply = try_direct_command(heard, llm_client)
+            if direct_reply is not None:
+                if direct_reply == "__JARVIS_STOP__":
                     print("[JARVIS] Text mode stopped.")
                     break
+                print(f"JARVIS: {direct_reply}")
+                continue
 
-                normalized = " ".join(heard.lower().strip().split())
-                normalized = normalized.strip(".,!?;:")
-
-                shutdown_phrases = {
-                    "shutdown jarvis", "matikan jarvis", "matikan diri",
-                    "matikan diri sendiri", "matikan dirimu", "stop jarvis",
-                }
-                shutdown_intent = normalized in shutdown_phrases
-                if shutdown_intent:
-                    print("[JARVIS] Shutdown command received.")
-                    print("JARVIS: Understood, Sir. Shutting down the JARVIS system.")
+            try:
+                reply = ask_agent(llm_client, heard)
+                if reply == "__JARVIS_STOP__":
+                    print("[JARVIS] Text mode stopped.")
                     break
-
-                direct_reply = try_direct_command(heard, llm_client)
-                if direct_reply is not None:
-                    if direct_reply == "__JARVIS_STOP__":
-                        print("[JARVIS] Text mode stopped.")
-                        break
-                    print(f"JARVIS: {direct_reply}")
-                    continue
-
-                try:
-                    reply = ask_agent(llm_client, heard)
-                    if reply == "__JARVIS_STOP__":
-                        print("[JARVIS] Text mode stopped.")
-                        break
-                    if reply:
-                        print(f"JARVIS: {reply}")
-                except KeyboardInterrupt:
-                    print("\n[JARVIS] Text mode stopped.")
-                    break
-                except Exception as exc:
-                    print(f"[AGENT] {exc}")
-                    print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
+                if reply:
+                    print(f"JARVIS: {reply}")
+            except KeyboardInterrupt:
+                print("\n[JARVIS] Text mode stopped.")
+                break
+            except Exception as exc:
+                print(f"[AGENT] {exc}")
+                print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
         return
 
     try:
