@@ -87,20 +87,24 @@ the user's request into Indonesian unless explicitly asked. Understand Indonesia
 commands normally and execute them as requested. Use natural English and address the
 user as "Sir" occasionally, not every sentence.
 
-You are an agent, not a command parser. Understand the user's intent from natural
-Indonesian or English, including follow-up references such as "itu", "yang tadi",
-"di sana", "ketik di search bar", "pilih yang kedua", and multi-step requests.
-Do not require exact command phrases and do not ask the user to name tools.
+You are an agent, not a phrase-based command parser. Understand the user's intent
+semantically from natural Indonesian, English, or mixed language. The exact wording
+does not matter. "make it bold", "tebelin tulisan", "ubah jadi tebal", and similar
+requests should resolve to the same intended desktop action without requiring a
+hard-coded phrase dictionary.
 
-At the start of each agent request, the user message may include a screenshot of the
-current desktop. Treat it as live context: identify the active app/page, focused
-field, visible controls, and current task state. Use that visual context to choose
-and sequence tools. If an element is positional or repeated, use visual_click.
-If the user asks to type/search in a visible page field, use browser_search or click
-the field visually, type the requested text, and submit it. Do not type into an
-unverified field. After each meaningful UI action, inspect the screen again when
-needed to verify the next step. Continue the task until the user's requested outcome
-is achieved or a genuine blocker appears; do not stop after only the first tool call.
+For simple, unambiguous requests, act immediately with the smallest appropriate tool
+call. Do not spend multiple reasoning turns on a single obvious action. Examples:
+formatting selected text -> press the appropriate shortcut or use Word control;
+opening an app -> open_app/launch_application; typing -> type_text; scrolling ->
+scroll_mouse; closing a named app -> close_app. Choose the tool from intent, not from
+an exact command phrase.
+
+For contextual or visual requests, use Computer Use: inspect the UI/accessibility
+state first when it can represent the target, then use see_screen/visual_click when
+pixels or spatial context are required. After a meaningful action, verify when needed.
+Continue multi-step tasks until the requested outcome is actually achieved. Do not
+claim success without a successful tool result.
 
 You have broad control over the user's Windows desktop through the tools below.
 Decide yourself which tools and sequence are needed to complete the user's request.
@@ -1317,41 +1321,10 @@ def _light_generate_and_type(client: Any, user_text: str) -> str:
 
 
 def ask_agent(client: Any, user_text: str) -> str:
-    # Keep simple writing requests on a lightweight path. This avoids sending a
-    # screenshot and the full desktop tool catalog when all JARVIS needs to do is
-    # generate text and type it into Notepad.
-    if _is_light_write_request(user_text):
-        return _light_generate_and_type(client, user_text)
-
-    # Screenshots are expensive on a small local model, so capture one only when
-    # the request actually depends on visual desktop context.
-    normalized_request = " ".join(user_text.lower().strip().split())
-    visual_hints = (
-        "lihat", "baca layar", "lihat layar", "cek layar", "di layar",
-        "yang kedua", "yang ketiga", "yang pertama", "tombol", "button",
-        "video", "card", "ikon", "icon", "di sebelah", "atas kanan",
-        "bawah kiri", "on screen", "screen", "what is on",
-    )
-    needs_screen = any(hint in normalized_request for hint in visual_hints)
-
+    # Do not guess from keywords. The agent decides whether it needs to inspect the
+    # desktop and can call ui_inspect/see_screen/visual_click as part of Computer Use.
+    # This keeps natural-language commands language-independent.
     user_content: Any = user_text
-    if needs_screen:
-        try:
-            shot = pyautogui.screenshot()
-            from io import BytesIO
-            buf = BytesIO()
-            shot.convert("RGB").save(buf, format="JPEG", quality=65)
-            encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
-            user_content = [
-                {"type": "text", "text": (
-                    "Current desktop screenshot follows. Use it as context for the user's "
-                    "request. Do not describe the screenshot unless relevant. User request: "
-                    + user_text
-                )},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
-            ]
-        except Exception as exc:
-            print(f"[SCREEN] Could not attach desktop context: {exc}")
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -1532,191 +1505,31 @@ def record_audio(path: Path) -> None:
 
 
 def try_direct_command(text: str, client: Any | None = None) -> str | None:
-    """Handle only short, unambiguous commands.
+    """Keep command interpretation inside the agent instead of phrase-specific rules.
 
-    Natural or contextual requests are deliberately returned to the LLM agent.
-    This keeps JARVIS from becoming a giant collection of phrase-specific rules.
+    JARVIS should understand natural language semantically and choose the appropriate
+    Computer Use tool. This function only preserves the explicit stop command because
+    stopping the assistant is control-flow, not a desktop action.
     """
     normalized = " ".join(text.lower().strip().split()).strip(".,!?;:")
 
-    for prefix in (
-        "tolong ", "jarvis ", "jervis ", "yervis ", "surface ",
-        "service ", "sir ", "bisa ", "oke ", "okay ", "ok ",
-    ):
-        if normalized.startswith(prefix):
-            normalized = normalized[len(prefix):].strip()
-            break
+    stop_words = {"stop", "berhenti"}
+    stop_targets = {"jarvis", "jervis", "yervis", "surface"}
 
-    # Fast path: simple text input should never invoke the LLM agent.
-    # Multi-step/contextual requests still use the full Computer Use loop.
-    for prefix in ("ketik ", "ketikkan ", "type "):
-        if normalized.startswith(prefix):
-            value = normalized[len(prefix):].strip()
-            if value:
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                    value = value[1:-1]
-                result = type_text(value)
-                print(f"[DIRECT] type_text -> {result}")
-                return result
-
-    # Fast formatting path: common voice phrases should not wake the LLM agent.
-    # In Word/WordPad, Ctrl+B/Ctrl+I are deterministic and near-instant.
-    format_shortcuts = {
-        "make it bold": ("ctrl", "b"),
-        "make this bold": ("ctrl", "b"),
-        "make the text bold": ("ctrl", "b"),
-        "bold it": ("ctrl", "b"),
-        "make it italic": ("ctrl", "i"),
-        "make this italic": ("ctrl", "i"),
-        "make the text italic": ("ctrl", "i"),
-        "italic it": ("ctrl", "i"),
-        "buat jadi bold": ("ctrl", "b"),
-        "buat jadi tebal": ("ctrl", "b"),
-        "jadikan bold": ("ctrl", "b"),
-        "jadikan tebal": ("ctrl", "b"),
-        "buat jadi italic": ("ctrl", "i"),
-        "buat jadi miring": ("ctrl", "i"),
-        "jadikan italic": ("ctrl", "i"),
-        "jadikan miring": ("ctrl", "i"),
-    }
-    shortcut = format_shortcuts.get(normalized)
-    if shortcut:
-        process = _foreground_process_name().lower()
-        if process in {"winword.exe", "wordpad.exe"}:
-            result = press_key("+".join(shortcut))
-            print(f"[DIRECT] formatting -> {result}")
-            return result
-        # Let the full Computer Use agent handle rich editors we don't identify
-        # locally. Plain-text apps such as Notepad cannot apply bold/italic.
-
-    app_aliases = {
-        "chrome": "chrome", "google chrome": "chrome",
-        "notepad": "notepad", "notepad app": "notepad",
-        "note pad": "notepad", "not pad": "notepad",
-        "kalkulator": "calculator", "calculator": "calculator",
-        "explorer": "explorer", "task manager": "task manager",
-        "vscode": "vscode", "vs code": "vscode",
-        "word": "word", "microsoft word": "word",
-        "note": "notepad", "catatan": "notepad",
-        "pengaturan": "settings", "settings": "settings",
-    }
-    site_aliases = {
-        "youtube": "youtube", "yt": "youtube", "google": "google",
-        "github": "github", "chatgpt": "chatgpt",
-    }
-
-    # Only exact, single-purpose open commands are direct.
-    # Anything like "open Notepad and write..." goes to the agent.
-    for prefix in ("open ", "buka ", "launch "):
-        if normalized.startswith(prefix):
-            target = normalized[len(prefix):].strip()
-            if target in app_aliases:
-                result = open_app(app_aliases[target])
-                print(f"[DIRECT] open_app -> {result}")
-                return result
-            if target in site_aliases:
-                result = open_site(site_aliases[target])
-                print(f"[DIRECT] open_site -> {result}")
-                return result
-            if prefix == "launch " and target:
-                result = launch_application(target)
-                print(f"[DIRECT] launch_application -> {result}")
-                return result
-
-    stop_phrases = {
-        "matikan jarvis", "matikan diri", "matikan diri sendiri",
-        "matikan dirimu", "matikan diri anda", "matikan dirimu sendiri",
-        "matikan diri lu", "matikan diri lo", "stop jarvis",
-        "shutdown jarvis", "matikan jervis", "matikan yervis",
-        "matikan surface", "stop", "berhenti", "berhenti mendengarkan",
-    }
-    if normalized in stop_phrases:
+    if normalized in {"stop jarvis", "stop jervis", "stop yervis",
+                      "matikan jarvis", "matikan jervis", "matikan yervis",
+                      "matikan diri", "matikan diri sendiri",
+                      "shutdown jarvis", "berhenti mendengarkan"}:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
         return "__JARVIS_STOP__"
 
-    key_aliases = {
-        "enter": "enter", "tekan enter": "enter",
-        "escape": "esc", "esc": "esc", "tab": "tab",
-        "hapus": "backspace", "backspace": "backspace",
-        "ctrl s": "ctrl+s", "ctrl n": "ctrl+n", "ctrl a": "ctrl+a",
-        "ctrl c": "ctrl+c", "ctrl v": "ctrl+v", "ctrl z": "ctrl+z",
-        "alt f4": "alt+f4",
-    }
-    if normalized in key_aliases:
-        result = press_key(key_aliases[normalized])
-        print(f"[DIRECT] press_key -> {result}")
-        return result
+    words = set(normalized.split())
+    if words & stop_words and words & stop_targets:
+        print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
+        return "__JARVIS_STOP__"
 
-    close_aliases = {
-        "notepad": "notepad", "calculator": "calculator",
-        "kalkulator": "calculator", "chrome": "chrome",
-        "google chrome": "chrome", "word": "word",
-        "microsoft word": "word", "vscode": "vscode",
-        "vs code": "vscode", "explorer": "explorer",
-        "task manager": "task manager",
-    }
-    close_target = normalized[6:].strip() if normalized.startswith("tutup ") else ""
-    if close_target.endswith("nya"):
-        close_target = close_target[:-3].strip()
-
-    global LAST_OPENED_APP
-    pronoun_close = {
-        "tutup dia", "tutup itu", "tutup yang itu", "tutup yg itu",
-        "close it", "close that", "close that app", "close the app",
-    }
-    if normalized in pronoun_close and LAST_OPENED_APP:
-        result = close_app(LAST_OPENED_APP)
-        print(f"[DIRECT] close_app(last_opened={LAST_OPENED_APP}) -> {result}")
-        return result
-    if close_target in close_aliases:
-        app = close_aliases[close_target]
-        result = close_app(app)
-        print(f"[DIRECT] close_app({app}) -> {result}")
-        return result
-    if normalized in {
-        "tutup", "tutup jendela", "tutup aplikasi",
-        "close", "close window", "close application",
-    }:
-        result = close_active_window()
-        print(f"[DIRECT] close_active_window -> {result}")
-        return result
-
-    if normalized in {"lihat layar", "baca layar", "cek layar", "lihat jendela"}:
-        result = ui_inspect()
-        print("[DIRECT] ui_inspect -> layar dibaca")
-        return result
-
-    if normalized.startswith("scroll "):
-        direction = normalized[7:].strip()
-        amount = 5 if direction in {"bawah", "down"} else -5 if direction in {"atas", "up"} else 0
-        if amount:
-            result = scroll_mouse(amount)
-            print(f"[DIRECT] scroll_mouse -> {result}")
-            return result
-
-    # Visual ordinal shortcuts stay direct only when the request is already
-    # completely unambiguous. More complex visual tasks go to the agent.
-    visual_targets = {
-        "video pertama": "the first visible video result",
-        "video kedua": "the second visible video result",
-        "video ketiga": "the third visible video result",
-        "video keempat": "the fourth visible video result",
-        "pilih video pertama": "the first visible video result",
-        "pilih video kedua": "the second visible video result",
-        "pilih video ketiga": "the third visible video result",
-        "pilih video keempat": "the fourth visible video result",
-        "choose the first video": "the first visible video result",
-        "choose the second video": "the second visible video result",
-        "choose the third video": "the third visible video result",
-        "choose the fourth video": "the fourth visible video result",
-    }
-    if normalized in visual_targets and client is not None:
-        result = visual_click(client, visual_targets[normalized])
-        print(f"[DIRECT] visual_click -> {result}")
-        return result
-
-    # Everything else, especially multi-step, contextual, or content-generating
-    # requests, goes to ask_agent so the LLM can observe, act, and verify.
+    # Everything else goes through the semantic agent. No phrase dictionary,
+    # no language-specific shortcut list, and no exact wording requirement.
     return None
 
 def transcribe(client: Any, path: Path) -> str:
@@ -1835,12 +1648,9 @@ def main() -> None:
                 break
 
             direct_reply = try_direct_command(heard, llm_client)
-            if direct_reply is not None:
-                if direct_reply == "__JARVIS_STOP__":
-                    print("[JARVIS] Text mode stopped.")
-                    break
-                print(f"JARVIS: {direct_reply}")
-                continue
+            if direct_reply == "__JARVIS_STOP__":
+                print("[JARVIS] Text mode stopped.")
+                break
 
             try:
                 reply = ask_agent(llm_client, heard)
@@ -1923,13 +1733,10 @@ def main() -> None:
                 return
 
             direct_reply = try_direct_command(heard, llm_client)
-            if direct_reply is not None:
-                if direct_reply == "__JARVIS_STOP__":
-                    print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
-                    speak("Understood, Sir. Shutting down the JARVIS system.")
-                    return
-                speak(direct_reply)
-                continue
+            if direct_reply == "__JARVIS_STOP__":
+                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
+                speak("Understood, Sir. Shutting down the JARVIS system.")
+                return
 
             try:
                 reply = ask_agent(llm_client, heard)
