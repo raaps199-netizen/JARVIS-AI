@@ -73,42 +73,22 @@ if not ACTION_SOUND_FILE:
     ACTION_SOUND_FILE = str(Path(__file__).resolve().parent / "sounds" / "action.wav")
 
 def play_action_feedback(success: bool = True) -> None:
-    """Play a short audible local completion/error sound without network/TTS."""
+    """Play only the configured custom WAV completion/error sound."""
     if not ACTION_FEEDBACK_ENABLED:
         return
     try:
-        # Use the user's WAV when available. Fall back to the generated tone.
         custom_path = Path(ACTION_SOUND_FILE).expanduser()
-        if custom_path.exists() and custom_path.is_file() and custom_path.suffix.lower() == ".wav":
-            winsound.PlaySound(str(custom_path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+        if not custom_path.exists() or not custom_path.is_file():
+            print(f"[SFX] Custom action sound not found: {custom_path}")
             return
+        if custom_path.suffix.lower() != ".wav":
+            print(f"[SFX] Custom action sound must be WAV: {custom_path}")
+            return
+        print(f"[SFX] Playing custom action sound: {custom_path}")
+        winsound.PlaySound(str(custom_path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+    except (RuntimeError, OSError, ValueError) as exc:
+        print(f"[SFX] Failed to play action sound: {exc}")
 
-        import math
-        sfx_path = Path(__file__).resolve().with_name(".jarvis_action_sfx.wav")
-        if not sfx_path.exists():
-            sample_rate = 22050
-            duration = 0.16 if success else 0.20
-            tones = ((880, 0.055), (1175, 0.075)) if success else ((330, 0.16),)
-            frames = []
-            for freq, tone_duration in tones:
-                count = int(sample_rate * tone_duration)
-                frames.extend(
-                    int(12000 * math.sin(2 * math.pi * freq * i / sample_rate))
-                    for i in range(count)
-                )
-                frames.extend([0] * int(sample_rate * 0.018))
-            with wave.open(str(sfx_path), "wb") as wav:
-                wav.setnchannels(1)
-                wav.setsampwidth(2)
-                wav.setframerate(sample_rate)
-                import array
-                wav.writeframes(array.array("h", frames).tobytes())
-        winsound.PlaySound(
-            str(sfx_path),
-            winsound.SND_FILENAME | winsound.SND_ASYNC,
-        )
-    except (RuntimeError, OSError, ValueError):
-        pass
 
 # Persistent worker state. Reusing the process removes Windows spawn + SDK initialization
 # from the critical path of every command. ESC can still terminate and recreate it.
