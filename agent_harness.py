@@ -15,7 +15,6 @@ import subprocess
 import multiprocessing
 import msvcrt
 import time
-from collections import deque
 import wave
 import webbrowser
 import pyautogui
@@ -41,23 +40,14 @@ load_dotenv()
 LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "ollama").strip().lower()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b").strip()
-OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
 OLLAMA_NATIVE_BASE_URL = os.getenv("OLLAMA_NATIVE_BASE_URL", "http://localhost:11434").strip().rstrip("/")
-OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "10m").strip()
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m").strip()
 MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
-STT_RETRY_MODEL = os.getenv("GROQ_STT_RETRY_MODEL", "whisper-large-v3")
-STT_MIN_AVG_LOGPROB = float(os.getenv("STT_MIN_AVG_LOGPROB", "-1.15"))
-STT_MAX_NO_SPEECH_PROB = float(os.getenv("STT_MAX_NO_SPEECH_PROB", "0.60"))
-STT_MAX_COMPRESSION_RATIO = float(os.getenv("STT_MAX_COMPRESSION_RATIO", "2.80"))
-STT_PROMPT = os.getenv(
-    "GROQ_STT_PROMPT",
-    "Perintah komputer dalam bahasa Indonesia dan Inggris. "
-    "Pertahankan nama aplikasi dan situs seperti YouTube, Chrome, Word, Notepad, "
-    "VS Code, Google, GitHub. Jangan menerjemahkan nama aplikasi. "
-    "Tulis persis kata yang terdengar.",
-)
+STT_LANGUAGE = os.getenv("GROQ_STT_LANGUAGE", "id").strip() or None
+STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "Perintah komputer bahasa Indonesia dan Inggris. Pertahankan nama aplikasi seperti YouTube, Chrome, Word, Notepad, VS Code, Google, GitHub.")
 VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 LAST_OPENED_APP = None
@@ -66,7 +56,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 MIN_RECORD_SECONDS = 0.35
-SILENCE_SECONDS = 1.5
+SILENCE_SECONDS = 0.55
 UI_DELAY_SECONDS = 0.8
 START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
@@ -87,7 +77,9 @@ def chat_create(client: Any, **kwargs):
         extra_body["think"] = False
         options = dict(extra_body.get("options", {}) or {})
         options["num_ctx"] = OLLAMA_NUM_CTX
+        options.setdefault("num_predict", 256)
         extra_body["options"] = options
+        extra_body["keep_alive"] = OLLAMA_KEEP_ALIVE
         kwargs["extra_body"] = extra_body
     return client.chat.completions.create(**kwargs)
 
@@ -1270,7 +1262,8 @@ def ask_agent(client: Any, user_text: str) -> str:
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",
-            temperature=0.4,
+            temperature=0.1,
+            max_completion_tokens=256,
         )
         message = response.choices[0].message
 
@@ -1351,60 +1344,30 @@ def ask_agent(client: Any, user_text: str) -> str:
 
 
 def record_audio(path: Path) -> None:
-    """Record one utterance with adaptive noise gating and a short pre-roll."""
+    """Low-latency utterance capture. Stop after a short silence tail."""
     print("[MIC] Mendengarkan...")
     block_size = 1600
     max_blocks = int(RECORD_SECONDS * SAMPLE_RATE / block_size)
     min_blocks = max(1, int(MIN_RECORD_SECONDS * SAMPLE_RATE / block_size))
     silence_blocks = max(1, int(SILENCE_SECONDS * SAMPLE_RATE / block_size))
-    calibration_blocks = max(4, int(0.40 * SAMPLE_RATE / block_size))
-    preroll_blocks = max(2, int(0.20 * SAMPLE_RATE / block_size))
-
     chunks = []
-    recent = deque(maxlen=preroll_blocks)
     started = False
     quiet_count = 0
 
-    with sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=1,
-        dtype="int16",
-        blocksize=block_size,
-    ) as stream:
-        # Estimate the room/microphone noise floor instead of assuming every
-        # microphone has the same amplitude. This avoids triggering on fans,
-        # keyboard noise, or electrical hiss.
-        calibration = []
-        for _ in range(calibration_blocks):
-            data, _ = stream.read(block_size)
-            chunk = data.copy()
-            recent.append(chunk)
-            calibration.append(float(abs(chunk).mean()))
-
-        noise_floor = sum(calibration) / max(1, len(calibration))
-        threshold = max(float(ENERGY_THRESHOLD), noise_floor * 2.2)
-        print(f"[MIC] Noise floor: {noise_floor:.1f}, gate: {threshold:.1f}")
-
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=block_size) as stream:
         while not started:
             data, _ = stream.read(block_size)
             chunk = data.copy()
-            recent.append(chunk)
-            energy = float(abs(chunk).mean())
-
-            if energy >= threshold:
+            if float(abs(chunk).mean()) >= ENERGY_THRESHOLD:
                 started = True
-                chunks.extend(list(recent))
-                quiet_count = 0
+                chunks.append(chunk)
                 print("[MIC] Suara terdeteksi.")
 
-        remaining_blocks = max_blocks - len(chunks)
-        for _ in range(max(0, remaining_blocks)):
+        for _ in range(max(0, max_blocks - 1)):
             data, _ = stream.read(block_size)
             chunk = data.copy()
-            energy = float(abs(chunk).mean())
             chunks.append(chunk)
-
-            if energy < threshold:
+            if float(abs(chunk).mean()) < ENERGY_THRESHOLD:
                 quiet_count += 1
                 if len(chunks) >= min_blocks and quiet_count >= silence_blocks:
                     break
@@ -1420,6 +1383,7 @@ def record_audio(path: Path) -> None:
         wav.setsampwidth(2)
         wav.setframerate(SAMPLE_RATE)
         wav.writeframes(recording.tobytes())
+
 
 
 def try_direct_command(text: str, client: Any | None = None) -> str | None:
@@ -1450,81 +1414,26 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
     # no language-specific shortcut list, and no exact wording requirement.
     return None
 
-def _transcription_quality(transcription: Any) -> tuple[bool, str]:
-    """Reject obvious hallucinated/noisy STT before it reaches the agent."""
-    segments = getattr(transcription, "segments", None) or []
-    if not segments:
-        return True, "no segment metadata"
-
-    avg_logprobs = []
-    no_speech_probs = []
-    compression_ratios = []
-
-    for segment in segments:
-        avg = getattr(segment, "avg_logprob", None)
-        no_speech = getattr(segment, "no_speech_prob", None)
-        compression = getattr(segment, "compression_ratio", None)
-        if avg is not None:
-            avg_logprobs.append(float(avg))
-        if no_speech is not None:
-            no_speech_probs.append(float(no_speech))
-        if compression is not None:
-            compression_ratios.append(float(compression))
-
-    if avg_logprobs and min(avg_logprobs) < STT_MIN_AVG_LOGPROB:
-        return False, f"low confidence avg_logprob={min(avg_logprobs):.2f}"
-    if no_speech_probs and max(no_speech_probs) > STT_MAX_NO_SPEECH_PROB:
-        return False, f"high no_speech_prob={max(no_speech_probs):.2f}"
-    if compression_ratios and max(compression_ratios) > STT_MAX_COMPRESSION_RATIO:
-        return False, f"unusual compression_ratio={max(compression_ratios):.2f}"
-    return True, "ok"
-
-
-def _groq_transcribe_once(client: Any, audio_bytes: bytes, filename: str, model: str) -> Any:
-    return client.audio.transcriptions.create(
-        file=(filename, audio_bytes),
-        model=model,
-        language="id",
-        prompt=STT_PROMPT,
-        response_format="verbose_json",
-        timestamp_granularities=["segment"],
-        temperature=0,
-    )
-
-
 def transcribe(client: Any, path: Path) -> str:
+    """Fast STT: one turbo request with plain-text output."""
     try:
-        audio_bytes = path.read_bytes()
-        transcription = _groq_transcribe_once(client, audio_bytes, path.name, STT_MODEL)
-        text = str(getattr(transcription, "text", "") or "").strip()
-
-        good, reason = _transcription_quality(transcription)
-        if not text:
-            print("[STT] Groq: empty transcription.")
-            return ""
-
-        if not good and STT_RETRY_MODEL and STT_RETRY_MODEL != STT_MODEL:
-            print(f"[STT] Low-confidence result ({reason}). Retrying with {STT_RETRY_MODEL}...")
-            retry = _groq_transcribe_once(client, audio_bytes, path.name, STT_RETRY_MODEL)
-            retry_text = str(getattr(retry, "text", "") or "").strip()
-            retry_good, retry_reason = _transcription_quality(retry)
-
-            if retry_text and retry_good:
-                print(f"[STT] Groq retry: {retry_text}")
-                return retry_text
-
-            print(f"[STT] Rejected uncertain transcription: {retry_text or text} ({retry_reason})")
-            return ""
-
-        if not good:
-            print(f"[STT] Rejected uncertain transcription: {text} ({reason})")
-            return ""
-
-        print(f"[STT] Groq: {text}")
+        kwargs = {
+            "file": (path.name, path.read_bytes()),
+            "model": STT_MODEL,
+            "prompt": STT_PROMPT,
+            "response_format": "text",
+            "temperature": 0,
+        }
+        if STT_LANGUAGE:
+            kwargs["language"] = STT_LANGUAGE
+        text = str(client.audio.transcriptions.create(**kwargs)).strip()
+        if text:
+            print(f"[STT] Groq: {text}")
         return text
     except Exception as exc:
         print(f"[STT] Groq gagal: {exc}")
         return ""
+
 
 
 
@@ -1782,3 +1691,65 @@ def main() -> None:
                 "yervis matikan diri lo",
                 "surface matikan diri lo",
             }
+
+            shutdown_words = set(normalized.split())
+            has_app_target = bool(shutdown_words & {
+                "kalkulator", "calculator", "notepad", "chrome", "word",
+                "vscode", "explorer", "aplikasi", "jendela"
+            })
+            shutdown_intent = (
+                normalized in shutdown_phrases
+                or (
+                    not has_app_target
+                    and ("matikan" in shutdown_words)
+                    and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"})
+                )
+                or normalized.startswith("matikan diri")
+                or normalized.startswith("stop jarvis")
+                or normalized.startswith("stop jervis")
+                or normalized.startswith("stop yervis")
+            )
+
+            if shutdown_intent:
+                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
+                speak("Understood, Sir. Shutting down the JARVIS system.")
+                return
+
+            direct_reply = try_direct_command(heard, llm_client)
+            if direct_reply == "__JARVIS_STOP__":
+                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
+                speak("Understood, Sir. Shutting down the JARVIS system.")
+                return
+
+            try:
+                reply = run_agent_interruptible(heard, TEXT_MODE)
+                if reply == "__JARVIS_STOP__":
+                    speak("Understood, Sir. Shutting down the JARVIS system.")
+                    break
+                if reply == "__JARVIS_CANCELLED__":
+                    speak("Cancelled, Sir.")
+                    continue
+                if reply.startswith("__JARVIS_ERROR__:"):
+                    print(f"[AGENT] {reply}")
+                    speak("I could not process that request, Sir.")
+                    continue
+                if reply:
+                    speak(reply)
+            except KeyboardInterrupt:
+                print("\n[JARVIS] Dihentikan dari keyboard.")
+                break
+            except Exception as exc:
+                print(f"[AGENT] {exc}")
+                speak("I could not process that request, Sir. Please check the terminal log.")
+
+    except KeyboardInterrupt:
+        print("\n[JARVIS] Dihentikan dari keyboard.")
+    finally:
+        try:
+            audio_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()
