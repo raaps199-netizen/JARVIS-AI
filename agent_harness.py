@@ -79,6 +79,21 @@ the user's request into Indonesian unless explicitly asked. Understand Indonesia
 commands normally and execute them as requested. Use natural English and address the
 user as "Sir" occasionally, not every sentence.
 
+You are an agent, not a command parser. Understand the user's intent from natural
+Indonesian or English, including follow-up references such as "itu", "yang tadi",
+"di sana", "ketik di search bar", "pilih yang kedua", and multi-step requests.
+Do not require exact command phrases and do not ask the user to name tools.
+
+At the start of each agent request, the user message may include a screenshot of the
+current desktop. Treat it as live context: identify the active app/page, focused
+field, visible controls, and current task state. Use that visual context to choose
+and sequence tools. If an element is positional or repeated, use visual_click.
+If the user asks to type/search in a visible page field, use browser_search or click
+the field visually, type the requested text, and submit it. Do not type into an
+unverified field. After each meaningful UI action, inspect the screen again when
+needed to verify the next step. Continue the task until the user's requested outcome
+is achieved or a genuine blocker appears; do not stop after only the first tool call.
+
 You have broad control over the user's Windows desktop through the tools below.
 Decide yourself which tools and sequence are needed to complete the user's request.
 Actually perform the requested desktop work and verify the result when practical.
@@ -1212,9 +1227,30 @@ def request_confirmation(description: str) -> bool:
 
 
 def ask_agent(client: Any, user_text: str) -> str:
+    # Give the local multimodal model current desktop context with every natural
+    # language request. This is an on-demand screenshot, not a hidden background
+    # recording or webcam capture.
+    user_content: Any = user_text
+    try:
+        shot = pyautogui.screenshot()
+        from io import BytesIO
+        buf = BytesIO()
+        shot.convert("RGB").save(buf, format="JPEG", quality=72)
+        encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+        user_content = [
+            {"type": "text", "text": (
+                "Current desktop screenshot follows. Use it as context for the user's "
+                "request. Do not describe the screenshot unless relevant. User request: "
+                + user_text
+            )},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+        ]
+    except Exception as exc:
+        print(f"[SCREEN] Could not attach desktop context: {exc}")
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_text},
+        {"role": "user", "content": user_content},
     ]
 
     # Safety/precision guard: if the user explicitly names an approved app
