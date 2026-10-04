@@ -497,8 +497,7 @@ def hotkey(keys: str) -> str:
 
 
 def _foreground_process_name() -> str:
-    if os.name != "nt":
-        return ""
+    if os.name != "nt":        return ""
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
@@ -997,8 +996,7 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
             int(arguments["start_y"]),
             int(arguments["end_x"]),
             int(arguments["end_y"]),
-            float(arguments.get("duration", 0.5)),
-        )
+            float(arguments.get("duration", 0.5)),        )
     if name == "pc_status":
         return pc_status()
     if name == "close_active_window":
@@ -1497,8 +1495,7 @@ def ask_agent(client: Any, user_text: str) -> str:
                         run_tool(tool_name, arguments, client)
                         if approval else "The user denied this consequential UI action."
                     )
-                else:
-                    result = run_tool(tool_name, arguments, client)
+                else:                    result = run_tool(tool_name, arguments, client)
 
                 if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):
                     description = result.split(":", 1)[1].strip()
@@ -1935,4 +1932,40 @@ def main() -> None:
     try:
         while True:
             try:
-                record_audio(audio_path)
+                record_audio(audio_path)                text = transcribe(stt_client, audio_path)
+                if not text:
+                    continue
+
+                direct_reply = try_direct_command(text, llm_client)
+                if direct_reply is not None:
+                    if direct_reply == "__JARVIS_STOP__":
+                        speak("Understood, Sir. Shutting down the JARVIS system.")
+                        break
+                    speak(direct_reply)
+                    continue
+
+                try:
+                    reply = ask_agent(llm_client, text)
+                    if reply == "__JARVIS_STOP__":
+                        speak("Understood, Sir. Shutting down the JARVIS system.")
+                        break
+                    if reply:
+                        speak(reply)
+                except KeyboardInterrupt:
+                    print("\n[JARVIS] Dihentikan dari keyboard.")
+                    break
+                except Exception as exc:
+                    print(f"[AGENT] {exc}")
+                    speak("I could not process that request, Sir. Please check the terminal log.")
+
+    except KeyboardInterrupt:
+        print("\n[JARVIS] Dihentikan dari keyboard.")
+    finally:
+        try:
+            audio_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()
