@@ -1431,305 +1431,70 @@ def record_audio(path: Path) -> None:
 
 
 def try_direct_command(text: str, client: Any | None = None) -> str | None:
-    normalized = " ".join(text.lower().strip().split())
-    # Whisper/Groq can mishear "Jarvis" as "Jervis", "Yervis", or "Surface".
-    # Treat these common wake-name variants as the same command prefix.
-    prefixes = ("tolong ", "jarvis ", "jervis ", "yervis ", "surface ", "service ", "sir ", "bisa ", "oke ", "okay ", "ok ")
+    """Handle only short, unambiguous commands.
 
-    for prefix in prefixes:
+    Natural or contextual requests are deliberately returned to the LLM agent.
+    This keeps JARVIS from becoming a giant collection of phrase-specific rules.
+    """
+    normalized = " ".join(text.lower().strip().split()).strip(".,!?;:")
+
+    for prefix in (
+        "tolong ", "jarvis ", "jervis ", "yervis ", "surface ",
+        "service ", "sir ", "bisa ", "oke ", "okay ", "ok ",
+    ):
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix):].strip()
-
-    site_aliases = {
-        "youtube": "youtube", "yt": "youtube", "you tube": "youtube",
-        "google": "google", "github": "github", "chatgpt": "chatgpt",
-    }
+            break
 
     app_aliases = {
-        "chrome": "chrome",
-        "google chrome": "chrome",
-        "notepad": "notepad", "notepad app": "notepad", "note pad": "notepad", "not pad": "notepad",
-        "kalkulator": "calculator",
-        "calculator": "calculator",
-        "explorer": "explorer",
-        "task manager": "task manager",
-        "vscode": "vscode",
-        "vs code": "vscode",
-        "word": "word",
-        "microsoft word": "word",
-        "note": "notepad",
-        "catatan": "notepad",
-        "pengaturan": "settings",
-        "settings": "settings",
+        "chrome": "chrome", "google chrome": "chrome",
+        "notepad": "notepad", "notepad app": "notepad",
+        "note pad": "notepad", "not pad": "notepad",
+        "kalkulator": "calculator", "calculator": "calculator",
+        "explorer": "explorer", "task manager": "task manager",
+        "vscode": "vscode", "vs code": "vscode",
+        "word": "word", "microsoft word": "word",
+        "note": "notepad", "catatan": "notepad",
+        "pengaturan": "settings", "settings": "settings",
+    }
+    site_aliases = {
+        "youtube": "youtube", "yt": "youtube", "google": "google",
+        "github": "github", "chatgpt": "chatgpt",
     }
 
-    if normalized.startswith("open "):
-        target = normalized[5:].strip()
-        if target in app_aliases:
-            result = open_app(app_aliases[target])
-            print(f"[DIRECT] open_app -> {result}")
-            return result
-        if target in site_aliases:
-            result = open_site(site_aliases[target])
-            print(f"[DIRECT] open_site -> {result}")
-            return result
-
-    if normalized.startswith("buka "):
-        target = normalized[5:].strip()
-        if target in app_aliases:
-            result = open_app(app_aliases[target])
-            print(f"[DIRECT] open_app -> {result}")
-            return result
-        if target in site_aliases:
-            result = open_site(site_aliases[target])
-            print(f"[DIRECT] open_site -> {result}")
-            return result
-
-    if normalized.startswith("launch "):
-        target = normalized[7:].strip()
-        if target in app_aliases:
-            result = open_app(app_aliases[target])
-            print(f"[DIRECT] launch_app -> {result}")
-            return result
-
-    if normalized.startswith("buka ") and normalized[5:].strip() in app_aliases:
-        app = app_aliases[normalized[5:].strip()]
-        result = open_app(app)
-        print(f"[DIRECT] open_app -> {result}")
-        return result
-
-    # Common short browser commands should bypass the LLM to save tokens.
-    for marker in ("search youtube for ", "search yt for ", "cari di youtube ", "cari di yt "):
-        if normalized.startswith(marker):
-            query = normalized[len(marker):].strip()
-            if query and client is not None:
-                result = browser_search(client, query)
-                print(f"[DIRECT] browser_search -> {result}")
+    # Only exact, single-purpose open commands are direct.
+    # Anything like "open Notepad and write..." goes to the agent.
+    for prefix in ("open ", "buka ", "launch "):
+        if normalized.startswith(prefix):
+            target = normalized[len(prefix):].strip()
+            if target in app_aliases:
+                result = open_app(app_aliases[target])
+                print(f"[DIRECT] open_app -> {result}")
                 return result
-
-    # Common English combined browser commands that should not spend an
-    # agent turn when the user explicitly asks for a known site + Google search.
-    if normalized.startswith("open ") and " and search " in normalized:
-        app_part, query = normalized[5:].split(" and search ", 1)
-        app = app_aliases.get(app_part.strip())
-        query = query.strip()
-        if app == "chrome" and query:
-            open_result = open_app("chrome")
-            search_result = search_web(query)
-            result = f"{open_result} {search_result}"
-            print(f"[DIRECT] chrome search -> {result}")
-            return result
-
-    # Handle common browser sequences locally so simple multi-step requests
-    # do not spend multiple Qwen turns.
-    page_search_markers = (
-        " lalu cari ", " terus cari ", " dan cari ",
-        " then search ", " and search ",
-    )
-    for marker in page_search_markers:
-        if normalized.startswith("buka ") and marker in normalized:
-            app_part, query = normalized[5:].split(marker, 1)
-            app = app_aliases.get(app_part.strip())
-            query = query.strip()
-            if app == "chrome" and query:
-                wants_page_search = (
-                    query.endswith(" di search bar")
-                    or query.endswith(" di kolom pencarian")
-                    or query.endswith(" in the search bar")
-                    or query.endswith(" in search bar")
-                )
-                for suffix in (" di search bar", " di kolom pencarian", " in the search bar", " in search bar"):
-                    if query.endswith(suffix):
-                        query = query[:-len(suffix)].strip()
-                        break
-                open_result = open_app("chrome")
-                time.sleep(UI_DELAY_SECONDS)
-                if wants_page_search and client is not None:
-                    search_result = browser_search(client, query)
-                else:
-                    search_result = search_web(query)
-                result = f"{open_result} {search_result}"
-                print(f"[DIRECT] browser sequence -> {result}")
+            if target in site_aliases:
+                result = open_site(site_aliases[target])
+                print(f"[DIRECT] open_site -> {result}")
                 return result
-
-    intro_phrases = {
-        "ceritain tentang diri lu", "ceritakan tentang diri lu",
-        "ceritain tentang diri lo", "ceritakan tentang diri lo",
-        "kenalin diri lu", "kenalkan diri lu", "kenalin diri lo", "kenalkan diri lo",
-        "ceritain tentang diri kamu", "ceritakan tentang diri kamu",
-        "siapa kamu", "lu siapa", "lo siapa", "kamu siapa",
-    }
-    if normalized in intro_phrases:
-        result = "I am JARVIS, your local desktop assistant. I can open applications, search the web, type text, press approved shortcuts, close specific applications, read basic PC status, and perform safe desktop actions."
-        print("[DIRECT] self_intro -> JARVIS")
-        return result
+            if prefix == "launch " and target:
+                result = launch_application(target)
+                print(f"[DIRECT] launch_application -> {result}")
+                return result
 
     stop_phrases = {
-        "matikan jarvis", "matikan diri", "matikan diri sendiri", "matikan dirimu", "matikan diri anda", "matikan dirimu sendiri",
-        "matikan diri lu", "matikan diri lo", "matikan diri sendiri lu",
-        "matikan diri sendiri lo", "stop jarvis", "shutdown jarvis",
-        "matikan diri sendiri", "matikan jervis", "matikan yervis", "matikan surface",
-        "stop", "berhenti", "berhenti mendengarkan",
+        "matikan jarvis", "matikan diri", "matikan diri sendiri",
+        "matikan dirimu", "matikan diri anda", "matikan dirimu sendiri",
+        "matikan diri lu", "matikan diri lo", "stop jarvis",
+        "shutdown jarvis", "matikan jervis", "matikan yervis",
+        "matikan surface", "stop", "berhenti", "berhenti mendengarkan",
     }
     if normalized in stop_phrases:
         print("[DIRECT] stop_jarvis -> JARVIS dihentikan.")
         return "__JARVIS_STOP__"
 
-    # Spatial/ordinal visual commands: use the current screen directly when the
-    # user explicitly identifies a repeated visual target. This avoids burning an
-    # agent turn and makes commands like "choose the second video" deterministic.
-    visual_targets = {
-        "choose the first video": "the first visible video result",
-        "choose the second video": "the second visible video result",
-        "choose the third video": "the third visible video result",
-        "choose the fourth video": "the fourth visible video result",
-        "pick the first video": "the first visible video result",
-        "pick the second video": "the second visible video result",
-        "pick the third video": "the third visible video result",
-        "pick the fourth video": "the fourth visible video result",
-        "click the first video": "the first visible video result",
-        "click the second video": "the second visible video result",
-        "click the third video": "the third visible video result",
-        "click the fourth video": "the fourth visible video result",
-        "open the first video": "the first visible video result",
-        "open the second video": "the second visible video result",
-        "open the third video": "the third visible video result",
-        "open the fourth video": "the fourth visible video result",
-        "video pertama": "the first visible video result",
-        "video kedua": "the second visible video result",
-        "video ketiga": "the third visible video result",
-        "video keempat": "the fourth visible video result",
-        "pilih video pertama": "the first visible video result",
-        "pilih video kedua": "the second visible video result",
-        "pilih video ketiga": "the third visible video result",
-        "pilih video keempat": "the fourth visible video result",
-    }
-    if normalized in visual_targets and client is not None:
-        result = visual_click(client, visual_targets[normalized])
-        print(f"[DIRECT] visual_click -> {result}")
-        return result
-
-    for click_prefix in ("klik ", "click "):
-        if normalized.startswith(click_prefix):
-            target=normalized[len(click_prefix):].strip()
-            if target:
-                result=ui_click(target); print(f"[DIRECT] ui_click -> {result}"); return result
-    if normalized in {"lihat layar","baca layar","cek layar","lihat jendela"}:
-        result=ui_inspect(); print("[DIRECT] ui_inspect -> layar dibaca"); return result
-    if normalized.startswith("scroll "):
-        direction=normalized[7:].strip()
-        amount=5 if direction in {"bawah","down"} else -5 if direction in {"atas","up"} else 0
-        if amount:
-            result=scroll_mouse(amount); print(f"[DIRECT] scroll_mouse -> {result}"); return result
-    # Natural page-search typing commands should use the visual search
-    # tool, not generic type_text. This covers phrases such as:
-    # "ketik Arduino Nano di search bar" and "Arduino Nano di search bar".
-    page_search_text = None
-    page_search_suffixes = (
-        " di search bar", " di kolom pencarian",
-        " in the search bar", " in search bar",
-    )
-    for suffix in page_search_suffixes:
-        if normalized.endswith(suffix):
-            candidate = normalized[:-len(suffix)].strip()
-            for prefix in ("ketik ", "ketikkan ", "tulis ", "type ", "search "):
-                if candidate.startswith(prefix):
-                    candidate = candidate[len(prefix):].strip()
-                    break
-            if candidate and candidate not in {"search bar", "kolom pencarian"}:
-                page_search_text = candidate
-            break
-    if page_search_text and client is not None:
-        result = browser_search(client, page_search_text)
-        print(f"[DIRECT] browser_search -> {result}")
-        return result
-
-    typing_prefixes = ("ketik ", "tulis ", "ketikkan ")
-    original_clean = " ".join(text.strip().split())
-    original_lower = original_clean.lower()
-    word_format_terms = ("bold", "tebal", "italic", "miring", "underline", "garis bawah", "judul", "heading", "ukuran", "font", "rata tengah", "rata kiri", "rata kanan", "justify", "tabel", "table")
-    for prefix in typing_prefixes:
-        if original_lower.startswith(prefix) and not any(term in original_lower for term in word_format_terms):
-            typed = original_clean[len(prefix):].strip()
-
-            # Let the LLM handle requests where the user wants JARVIS to
-            # generate the content first, then type the generated result.
-            generate_markers = (
-                "apapun tentang",
-                "apa saja tentang",
-                "sesuatu tentang",
-                "ceritakan tentang",
-                "jelaskan tentang",
-                "buatkan tentang",
-                "tulis tentang",
-                "tuliskan tentang",
-                "jawaban tentang",
-            )
-            if any(marker in typed.lower() for marker in generate_markers):
-                return None
-
-            if typed.startswith(","):
-                typed = typed[1:].strip()
-            if typed:
-                result = type_text(typed)
-                print(f"[DIRECT] type_text -> {result}")
-                return result
-
-    action_markers = (" dan ketik ", " lalu ketik ", " terus ketik ", " dan tulis ", " lalu tulis ")
-    if normalized.startswith("buka "):
-        for marker in action_markers:
-            if marker in normalized:
-                app_part, text = normalized[5:].split(marker, 1)
-                app = app_aliases.get(app_part.strip())
-                text = text.strip()
-                if app and text:
-                    open_result = open_app(app)
-                    time.sleep(UI_DELAY_SECONDS)
-                    type_result = type_text(text)
-                    result = f"{open_result} {type_result}"
-                    print(f"[DIRECT] open + type -> {result}")
-                    return result
-
-    close_aliases = {
-        "notepad": "notepad",
-        "calculator": "calculator",
-        "kalkulator": "calculator",
-        "chrome": "chrome",
-        "google chrome": "chrome",
-        "word": "word",
-        "microsoft word": "word",
-        "vscode": "vscode",
-        "vs code": "vscode",
-        "explorer": "explorer",
-        "task manager": "task manager",
-    }
-    close_target = normalized[6:].strip() if normalized.startswith("tutup ") else ""
-    if close_target.endswith("nya"):
-        close_target = close_target[:-3].strip()
-    # Natural close commands such as "tutup dia" / "close it" refer to the
-    # most recently opened known app when one is available.
-    pronoun_close = {
-        "tutup dia", "tutup itu", "tutup yang itu", "tutup yg itu",
-        "close it", "close that", "close that app", "close the app",
-    }
-    global LAST_OPENED_APP
-    if normalized in pronoun_close and LAST_OPENED_APP:
-        result = close_app(LAST_OPENED_APP)
-        print(f"[DIRECT] close_app(last_opened={LAST_OPENED_APP}) -> {result}")
-        return result
-    if close_target in close_aliases:
-        app = close_aliases[close_target]
-        result = close_app(app)
-        print(f"[DIRECT] close_app({app}) -> {result}")
-        return result
-    if normalized in {"tutup", "tutup jendela", "tutup aplikasi", "close", "close window", "close application"}:
-        result = close_active_window()
-        print(f"[DIRECT] close_active_window -> {result}")
-        return result
-
     key_aliases = {
-        "enter": "enter", "tekan enter": "enter", "escape": "esc", "esc": "esc",
-        "tab": "tab", "hapus": "backspace", "backspace": "backspace",
+        "enter": "enter", "tekan enter": "enter",
+        "escape": "esc", "esc": "esc", "tab": "tab",
+        "hapus": "backspace", "backspace": "backspace",
         "ctrl s": "ctrl+s", "ctrl n": "ctrl+n", "ctrl a": "ctrl+a",
         "ctrl c": "ctrl+c", "ctrl v": "ctrl+v", "ctrl z": "ctrl+z",
         "alt f4": "alt+f4",
@@ -1739,62 +1504,77 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
         print(f"[DIRECT] press_key -> {result}")
         return result
 
+    close_aliases = {
+        "notepad": "notepad", "calculator": "calculator",
+        "kalkulator": "calculator", "chrome": "chrome",
+        "google chrome": "chrome", "word": "word",
+        "microsoft word": "word", "vscode": "vscode",
+        "vs code": "vscode", "explorer": "explorer",
+        "task manager": "task manager",
+    }
+    close_target = normalized[6:].strip() if normalized.startswith("tutup ") else ""
+    if close_target.endswith("nya"):
+        close_target = close_target[:-3].strip()
 
-    # Search inside the current webpage's search field. This is deliberately
-    # handled before the generic web-search shortcut so "search X in the search
-    # bar" never gets redirected to Google.
-    page_search_query = None
-    page_search_prefixes = (
-        "search in the search bar ", "search the search bar for ",
-        "search in youtube for ", "search youtube for ", "search yt for ",
-        "cari di search bar ", "cari di kolom pencarian ",
-        "cari di kolom search ", "cari di youtube ", "cari di yt ",
-    )
-    for prefix in page_search_prefixes:
-        if normalized.startswith(prefix):
-            page_search_query = normalized[len(prefix):].strip()
-            break
-    if page_search_query is None:
-        for suffix in (" in the search bar", " in search bar", " di search bar", " di kolom pencarian"):
-            if normalized.endswith(suffix) and normalized[:-len(suffix)].strip():
-                candidate = normalized[:-len(suffix)].strip()
-                if candidate.startswith(("search ", "cari ")):
-                    page_search_query = candidate.split(" ", 1)[1].strip()
-                break
-    if page_search_query and client is not None:
-        result = browser_search(client, page_search_query)
-        print(f"[DIRECT] browser_search -> {result}")
+    global LAST_OPENED_APP
+    pronoun_close = {
+        "tutup dia", "tutup itu", "tutup yang itu", "tutup yg itu",
+        "close it", "close that", "close that app", "close the app",
+    }
+    if normalized in pronoun_close and LAST_OPENED_APP:
+        result = close_app(LAST_OPENED_APP)
+        print(f"[DIRECT] close_app(last_opened={LAST_OPENED_APP}) -> {result}")
+        return result
+    if close_target in close_aliases:
+        app = close_aliases[close_target]
+        result = close_app(app)
+        print(f"[DIRECT] close_app({app}) -> {result}")
+        return result
+    if normalized in {
+        "tutup", "tutup jendela", "tutup aplikasi",
+        "close", "close window", "close application",
+    }:
+        result = close_active_window()
+        print(f"[DIRECT] close_active_window -> {result}")
         return result
 
-    search_prefixes = (
-        "cari tentang ",
-        "cari ",
-        "search tentang ",
-        "search ",
-        "google tentang ",
-        "google ",
-        "buka chrome dan cari tentang ",
-        "buka chrome lalu cari tentang ",
-        "buka chrome terus cari tentang ",
-        "buka chrome dan cari ",
-        "buka chrome lalu cari ",
-        "buka chrome terus cari ",
-    )
+    if normalized in {"lihat layar", "baca layar", "cek layar", "lihat jendela"}:
+        result = ui_inspect()
+        print("[DIRECT] ui_inspect -> layar dibaca")
+        return result
 
-    for prefix in search_prefixes:
-        if normalized.startswith(prefix):
-            query = normalized[len(prefix):].strip()
-            for suffix in (" di website", " di web", " lewat website", " lewat web", " di google"):
-                if query.endswith(suffix):
-                    query = query[:-len(suffix)].strip()
-                    break
-            if query:
-                result = search_web(query)
-                print(f"[DIRECT] search_web -> {result}")
-                return result
+    if normalized.startswith("scroll "):
+        direction = normalized[7:].strip()
+        amount = 5 if direction in {"bawah", "down"} else -5 if direction in {"atas", "up"} else 0
+        if amount:
+            result = scroll_mouse(amount)
+            print(f"[DIRECT] scroll_mouse -> {result}")
+            return result
 
+    # Visual ordinal shortcuts stay direct only when the request is already
+    # completely unambiguous. More complex visual tasks go to the agent.
+    visual_targets = {
+        "video pertama": "the first visible video result",
+        "video kedua": "the second visible video result",
+        "video ketiga": "the third visible video result",
+        "video keempat": "the fourth visible video result",
+        "pilih video pertama": "the first visible video result",
+        "pilih video kedua": "the second visible video result",
+        "pilih video ketiga": "the third visible video result",
+        "pilih video keempat": "the fourth visible video result",
+        "choose the first video": "the first visible video result",
+        "choose the second video": "the second visible video result",
+        "choose the third video": "the third visible video result",
+        "choose the fourth video": "the fourth visible video result",
+    }
+    if normalized in visual_targets and client is not None:
+        result = visual_click(client, visual_targets[normalized])
+        print(f"[DIRECT] visual_click -> {result}")
+        return result
+
+    # Everything else, especially multi-step, contextual, or content-generating
+    # requests, goes to ask_agent so the LLM can observe, act, and verify.
     return None
-
 
 def transcribe(client: Any, path: Path) -> str:
     try:
