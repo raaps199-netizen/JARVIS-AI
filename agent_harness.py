@@ -463,7 +463,8 @@ def _perform_confirmed_rename(source: str, new_name: str) -> str:
 
 def _perform_confirmed_move(source: str, destination: str) -> str:
     import shutil as _shutil
-    src = Path(os.path.expandvars(os.path.expanduser(str(source).strip()))).resolve()    dst = Path(os.path.expandvars(os.path.expanduser(str(destination).strip()))).resolve()
+    src = Path(os.path.expandvars(os.path.expanduser(str(source).strip()))).resolve()
+    dst = Path(os.path.expandvars(os.path.expanduser(str(destination).strip()))).resolve()
     try:
         final = dst / src.name if dst.exists() and dst.is_dir() else dst
         _shutil.move(str(src), str(final))
