@@ -67,7 +67,9 @@ def chat_create(client: Any, **kwargs):
     if LLM_PROVIDER == "ollama":
         extra_body = dict(kwargs.pop("extra_body", {}) or {})
         extra_body["think"] = False
-        extra_body["num_ctx"] = OLLAMA_NUM_CTX
+        options = dict(extra_body.get("options", {}) or {})
+        options["num_ctx"] = OLLAMA_NUM_CTX
+        extra_body["options"] = options
         kwargs["extra_body"] = extra_body
     return client.chat.completions.create(**kwargs)
 
