@@ -328,8 +328,12 @@ def open_site(name: str) -> str:
     if name not in SITES:
         return f"Website {name} belum tersedia."
     try:
-        opened = webbrowser.open(SITES[name], new=2)
-        return f"Successfully opened {name}." if opened else f"Browser menolak membuka {name}."
+        url = SITES[name]
+        if os.name == "nt":
+            os.startfile(url)
+        else:
+            webbrowser.open(url, new=2)
+        return f"Successfully opened {name}."
     except OSError as exc:
         return f"Failed to open {name}: {exc}"
 
@@ -382,8 +386,11 @@ def open_url(url: str) -> str:
     if not url:
         return "The URL is empty."
     try:
-        opened = webbrowser.open(url, new=2)
-        return f"Opened {url}." if opened else "The browser refused to open the URL."
+        if os.name == "nt":
+            os.startfile(url)
+        else:
+            webbrowser.open(url, new=2)
+        return f"Opened {url}."
     except Exception as exc:
         return f"Failed to open URL: {exc}"
 
