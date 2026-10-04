@@ -44,9 +44,11 @@ from jarvis_tts import speak
 
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "gemini").strip().lower()
+LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "groq").strip().lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
+GROQ_AGENT_MODEL = os.getenv("GROQ_AGENT_MODEL", "openai/gpt-oss-20b").strip()
+GROQ_AGENT_REASONING = os.getenv("GROQ_AGENT_REASONING", "low").strip().lower()
 GEMINI_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "minimal").strip().lower()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b").strip()
@@ -54,7 +56,7 @@ OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
 OLLAMA_NATIVE_BASE_URL = os.getenv("OLLAMA_NATIVE_BASE_URL", "http://localhost:11434").strip().rstrip("/")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m").strip()
-MODEL = GEMINI_MODEL if LLM_PROVIDER == "gemini" else OLLAMA_MODEL
+MODEL = GEMINI_MODEL if LLM_PROVIDER == "gemini" else (GROQ_AGENT_MODEL if LLM_PROVIDER == "groq" else OLLAMA_MODEL)
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 STT_LANGUAGE = os.getenv("GROQ_STT_LANGUAGE", "").strip() or None
 STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "Computer commands in Indonesian or English. Keep app and site names exactly: YouTube, Chrome, Word, Notepad, VS Code, Google, GitHub.")
@@ -68,17 +70,37 @@ JARVIS_MEMORY = JarvisMemory()
 ACTION_FEEDBACK_ENABLED = os.getenv("JARVIS_ACTION_SOUND", "1").strip().lower() not in {"0", "false", "off", "no"}
 
 def play_action_feedback(success: bool = True) -> None:
-    """Play a short non-verbal completion/error sound for voice-mode actions."""
+    """Play a short audible local completion/error sound without network/TTS."""
     if not ACTION_FEEDBACK_ENABLED:
         return
     try:
-        if success:
-            winsound.Beep(880, 55)
-            winsound.Beep(1175, 75)
-        else:
-            winsound.Beep(330, 120)
-    except (RuntimeError, OSError):
-        # Audio feedback must never break the agent itself.
+        # PlaySound with a generated WAV is much more reliable on modern Windows
+        # than winsound.Beep, which may be routed to an unavailable PC speaker.
+        import math
+        sfx_path = Path(__file__).resolve().with_name(".jarvis_action_sfx.wav")
+        if not sfx_path.exists():
+            sample_rate = 22050
+            duration = 0.16 if success else 0.20
+            tones = ((880, 0.055), (1175, 0.075)) if success else ((330, 0.16),)
+            frames = []
+            for freq, tone_duration in tones:
+                count = int(sample_rate * tone_duration)
+                frames.extend(
+                    int(12000 * math.sin(2 * math.pi * freq * i / sample_rate))
+                    for i in range(count)
+                )
+                frames.extend([0] * int(sample_rate * 0.018))
+            with wave.open(str(sfx_path), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(sample_rate)
+                import array
+                wav.writeframes(array.array("h", frames).tobytes())
+        winsound.PlaySound(
+            str(sfx_path),
+            winsound.SND_FILENAME | winsound.SND_ASYNC,
+        )
+    except (RuntimeError, OSError, ValueError):
         pass
 
 # Persistent worker state. Reusing the process removes Windows spawn + SDK initialization
@@ -103,6 +125,10 @@ def build_llm_client():
         if not GEMINI_API_KEY:
             raise RuntimeError("GEMINI_API_KEY belum diatur.")
         return genai.Client(api_key=GEMINI_API_KEY)
+    if LLM_PROVIDER == "groq":
+        if not GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY belum diatur.")
+        return Groq(api_key=GROQ_API_KEY)
     if LLM_PROVIDER == "ollama":
         return OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL, timeout=OLLAMA_TIMEOUT_SECONDS, max_retries=0)
     raise RuntimeError(f"Unsupported JARVIS_LLM_PROVIDER: {LLM_PROVIDER}")
@@ -1492,7 +1518,9 @@ def _remember_turn(user_text: str, reply: str) -> None:
 
 
 def ask_agent(client: Any, user_text: str) -> str:
-    """Run JARVIS through Gemini Interactions API with real client-side function calling."""
+    """Run JARVIS through the configured reasoning backend."""
+    if LLM_PROVIDER == "groq":
+        return _ask_agent_groq(client, user_text)
     if LLM_PROVIDER != "gemini":
         return _ask_agent_ollama(client, user_text)
 
@@ -1603,6 +1631,85 @@ def ask_agent(client: Any, user_text: str) -> str:
     reply = "I stopped after several tool steps to avoid an infinite loop."
     _remember_turn(user_text, reply)
     return reply
+
+
+def _ask_agent_groq(client: Any, user_text: str) -> str:
+    """Low-latency Groq agent path for voice-first desktop control and normal chat."""
+    tools = _select_tools_for_query(user_text)
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+            + "\nFor simple desktop commands, call the correct tool immediately. "
+              "Do not explain the action before or after calling it.",
+        },
+        {"role": "user", "content": _agent_input_with_memory(user_text)},
+    ]
+    action_tools = {
+        "open_app", "open_site", "open_url", "open_folder", "open_path",
+        "launch_application", "type_text", "press_key", "hotkey",
+        "scroll_mouse", "click_at", "double_click_at", "move_mouse",
+        "drag_mouse", "ui_click", "ui_act", "word_control",
+        "close_app", "close_active_window",
+    }
+    no_followup_tools = action_tools
+    did_action = False
+
+    for round_index in range(4):
+        started = time.perf_counter()
+        kwargs = {
+            "model": GROQ_AGENT_MODEL,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": 0,
+            "max_completion_tokens": 160,
+            "parallel_tool_calls": True,
+        }
+        if GROQ_AGENT_MODEL.startswith("openai/gpt-oss"):
+            kwargs["reasoning_effort"] = GROQ_AGENT_REASONING
+            kwargs["include_reasoning"] = False
+
+        response = client.chat.completions.create(**kwargs)
+        elapsed = (time.perf_counter() - started) * 1000
+        print(f"[LATENCY] Groq agent round {round_index + 1}: {elapsed:.0f} ms")
+        message = response.choices[0].message
+        tool_calls = message.tool_calls or []
+
+        if not tool_calls:
+            reply = (message.content or "").strip()
+            _remember_turn(user_text, reply)
+            return "__JARVIS_ACTION_DONE__" if did_action else reply
+
+        messages.append(message)
+        results = []
+        for tool_call in tool_calls:
+            tool_name = str(tool_call.function.name)
+            raw_arguments = tool_call.function.arguments or "{}"
+            arguments = raw_arguments if isinstance(raw_arguments, dict) else json.loads(raw_arguments)
+            did_action = did_action or tool_name in action_tools
+            tool_started = time.perf_counter()
+            result = _execute_agent_tool(tool_name, arguments, client)
+            print(f"[LATENCY] Tool {tool_name}: {(time.perf_counter() - tool_started) * 1000:.0f} ms")
+            print(f"[TOOL] {tool_name} -> {result}")
+            if result == "__JARVIS_STOP__":
+                return "__JARVIS_STOP__"
+            results.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": tool_name,
+                "content": str(result),
+            })
+
+        messages.extend(results)
+
+        # For deterministic actions, don't pay for a second LLM call just to say
+        # "Done". The local action result is enough, and voice mode already uses SFX.
+        if all(tool_call.function.name in no_followup_tools for tool_call in tool_calls):
+            _remember_turn(user_text, "Action completed.")
+            return "__JARVIS_ACTION_DONE__"
+
+    return "I stopped after several tool steps to avoid an infinite loop."
 
 
 def _ask_agent_ollama(client: Any, user_text: str) -> str:
