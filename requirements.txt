@@ -3,5 +3,6 @@ openai
 python-dotenv
 pywinauto
 pywin32
+psutil>=5.9
 google-genai
 comtypes>=1.2
