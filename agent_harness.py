@@ -1436,9 +1436,12 @@ def _select_tools_for_query(query: str, top_n: int = 10) -> list[dict[str, Any]]
 
     # Keep the proven semantic safety net. Relevance scoring fills the remaining slots.
     # This is semantic tool routing, not phrase-specific command matching.
+    # Keep only the broad, high-value desktop primitives always available.
+    # Observation/vision tools are selected by relevance instead of competing with
+    # deterministic actions such as close_app.
     core = {
         "open_app", "open_site", "open_url", "type_text", "press_key",
-        "ui_map", "ui_act", "ui_read", "visual_click", "see_screen",
+        "close_app", "close_active_window", "ui_act",
     }
     selected = {i for i, d in enumerate(declarations) if d.get("name") in core}
     for _score, i in sorted(scores, reverse=True):
