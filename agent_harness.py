@@ -117,10 +117,12 @@ For an obvious single action, make one tool call immediately. Choose the smalles
 appropriate tool: open_app/open_site/open_url, close_app, type_text, press_key/hotkey,
 scroll_mouse, word_control, or other matching tool.
 
-If the user's request is a contextual action inside the currently active application,
-do NOT reopen or relaunch that application unless the user explicitly asks to open or
-launch it. Use the current desktop context to decide whether the requested app is already
-active.
+If the user explicitly names an application to close, use close_app for that named
+application. Do not substitute ui_act, see_screen, or a visual click for close_app, and
+do not claim the app was closed unless close_app reports success. If the user asks to
+close the active/foreground window without naming an app, use close_active_window.
+For contextual actions inside the currently active application, do NOT reopen or relaunch
+that application unless the user explicitly asks to open or launch it.
 
 For multi-step requests, when the next actions are predictable and safe after the earlier
 action succeeds, emit the complete sequence as multiple function calls in the same model
@@ -833,7 +835,8 @@ def press_key(key: str) -> str:
         "up": "up", "down": "down", "left": "left", "right": "right",
         "ctrl+s": "ctrl+s", "ctrl+n": "ctrl+n", "ctrl+a": "ctrl+a",
         "ctrl+c": "ctrl+c", "ctrl+v": "ctrl+v", "ctrl+x": "ctrl+x",
-        "ctrl+z": "ctrl+z", "alt+f4": "alt+f4",
+        "ctrl+z": "ctrl+z", "ctrl+b": "ctrl+b", "ctrl+i": "ctrl+i", "ctrl+u": "ctrl+u",
+        "alt+f4": "alt+f4",
     }
     normalized = str(key).lower().replace(" ", "")
     mapped = aliases.get(normalized)
@@ -1208,6 +1211,13 @@ def close_app(name: str) -> str:
             title = title_buffer.value.strip().lower()
 
             matched = process_name in targets
+
+            # Modern Windows Store/WinUI apps can expose a top-level window whose
+            # owning process is not the executable name we expect. For Notepad,
+            # use its visible title as a narrow fallback instead of giving up.
+            if name == "notepad" and not matched:
+                matched = "notepad" in title
+
             if (
                 name == "calculator"
                 and process_name == "applicationframehost.exe"
@@ -1411,7 +1421,8 @@ def _select_tools_for_query(query: str, top_n: int = 10) -> list[dict[str, Any]]
 
     # Keep the proven semantic safety net. Relevance scoring fills the remaining slots.
     # This is semantic tool routing, not phrase-specific command matching.
-    # Keep only the broad, high-value desktop primitives always available.
+    # Deterministic desktop primitives stay available so the model can choose them
+    # instead of being forced through a visual fallback.
     # Observation/vision tools are selected by relevance instead of competing with
     # deterministic actions such as close_app.
     core = {
@@ -1798,293 +1809,3 @@ def _stop_agent_worker() -> None:
 
     if conn is not None:
         try:
-            conn.send(None)
-        except Exception:
-            pass
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    if worker is not None:
-        try:
-            if worker.is_alive():
-                worker.join(timeout=0.35)
-            if worker.is_alive():
-                worker.terminate()
-                worker.join(timeout=0.75)
-            if worker.is_alive():
-                worker.kill()
-                worker.join(timeout=0.5)
-        except Exception:
-            pass
-
-
-def _start_agent_worker(text_mode: bool) -> bool:
-    """Start and warm one reusable worker before the first user request."""
-    global _AGENT_WORKER, _AGENT_PARENT_CONN, _AGENT_WORKER_CTX
-
-    _stop_agent_worker()
-
-    ctx = multiprocessing.get_context("spawn")
-    parent_conn, child_conn = ctx.Pipe(duplex=True)
-    worker = ctx.Process(
-        target=_agent_worker_loop,
-        args=(child_conn, child_conn, text_mode),
-        daemon=True,
-    )
-    worker.start()
-    child_conn.close()
-
-    _AGENT_WORKER_CTX = ctx
-    _AGENT_WORKER = worker
-    _AGENT_PARENT_CONN = parent_conn
-
-    deadline = time.monotonic() + 8.0
-    while time.monotonic() < deadline:
-        if parent_conn.poll(0.05):
-            status, payload = parent_conn.recv()
-            if status == "ready":
-                print("[AGENT] Persistent worker ready.")
-                return True
-            print(f"[AGENT] Worker startup failed: {payload}")
-            _stop_agent_worker()
-            return False
-        if not worker.is_alive():
-            print(f"[AGENT] Worker exited during startup with code {worker.exitcode}.")
-            _stop_agent_worker()
-            return False
-
-    print("[AGENT] Worker startup timed out.")
-    _stop_agent_worker()
-    return False
-
-
-def run_agent_interruptible(user_text: str, text_mode: bool) -> str:
-    """Send one request to the persistent worker; ESC still hard-stops it."""
-    global _AGENT_WORKER, _AGENT_PARENT_CONN
-
-    if _AGENT_WORKER is None or not _AGENT_WORKER.is_alive() or _AGENT_PARENT_CONN is None:
-        if not _start_agent_worker(text_mode):
-            return "__JARVIS_ERROR__:failed to start agent worker"
-
-    worker = _AGENT_WORKER
-    conn = _AGENT_PARENT_CONN
-
-    try:
-        conn.send(str(user_text))
-
-        while worker.is_alive():
-            if conn.poll(0.05):
-                status, payload = conn.recv()
-                if status == "ok":
-                    return payload
-                if status == "error":
-                    return f"__JARVIS_ERROR__:{payload}"
-                continue
-
-            if msvcrt.kbhit():
-                key = msvcrt.getwch()
-                if key == "\x1b":
-                    print("\n[AGENT] ESC detected. Force-stopping the current request...")
-                    _stop_agent_worker()
-                    return "__JARVIS_CANCELLED__"
-
-        if conn.poll(0.1):
-            status, payload = conn.recv()
-            if status == "ok":
-                return payload
-            if status == "error":
-                return f"__JARVIS_ERROR__:{payload}"
-
-        exitcode = worker.exitcode
-        _stop_agent_worker()
-        return f"__JARVIS_ERROR__:agent worker exited with code {exitcode}"
-
-    except (EOFError, OSError, BrokenPipeError) as exc:
-        _stop_agent_worker()
-        return f"__JARVIS_ERROR__:agent worker IPC failed: {exc}"
-    except KeyboardInterrupt:
-        print("\n[AGENT] Keyboard interrupt. Force-stopping the current request...")
-        _stop_agent_worker()
-        return "__JARVIS_CANCELLED__"
-
-
-def main() -> None:
-    # The persistent worker owns the Gemini/Groq clients. Keeping duplicate clients
-    # in the parent process only wastes RAM on Windows.
-    if not TEXT_MODE and not GROQ_API_KEY:
-        print("GROQ_API_KEY belum diatur. Voice mode saat ini memakai Groq hanya untuk STT.")
-        return
-
-    # Voice STT runs in the parent so microphone capture and transcription remain
-    # responsive while the persistent worker owns the Gemini reasoning client.
-    stt_client = Groq(api_key=GROQ_API_KEY) if not TEXT_MODE else None
-
-    if not TEXT_MODE:
-        speak("System online, Sir. I am ready to listen.")
-    audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
-
-    _start_agent_worker(TEXT_MODE)
-
-    if TEXT_MODE:
-        print(f"JARVIS text mode online, Sir. LLM: {LLM_PROVIDER}/{MODEL}")
-        print("JARVIS text mode online, Sir. Type commands; use /exit to quit.")
-        while True:
-            try:
-                heard = input("Sir> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\n[JARVIS] Text mode stopped.")
-                break
-
-            if not heard:
-                continue
-            if heard.lower().strip() in {"/exit", "/quit", "/stop", "exit", "quit"}:
-                print("[JARVIS] Text mode stopped.")
-                break
-
-            normalized = " ".join(heard.lower().strip().split())
-            normalized = normalized.strip(".,!?;:")
-
-            shutdown_phrases = {
-                "shutdown jarvis", "matikan jarvis", "matikan diri",
-                "matikan diri sendiri", "matikan dirimu", "stop jarvis",
-            }
-            shutdown_intent = normalized in shutdown_phrases
-            if shutdown_intent:
-                print("[JARVIS] Shutdown command received.")
-                print("JARVIS: Understood, Sir. Shutting down the JARVIS system.")
-                break
-
-            direct_reply = try_direct_command(heard, None)
-            if direct_reply == "__JARVIS_STOP__":
-                print("[JARVIS] Text mode stopped.")
-                break
-
-            try:
-                reply = run_agent_interruptible(heard, TEXT_MODE)
-                if reply == "__JARVIS_STOP__":
-                    print("[JARVIS] Text mode stopped.")
-                    break
-                if reply == "__JARVIS_CANCELLED__":
-                    print("JARVIS: Request cancelled, Sir.")
-                    continue
-                if reply.startswith("__JARVIS_ERROR__:"):
-                    print(f"[AGENT] {reply}")
-                    print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
-                    continue
-                if reply:
-                    print(f"JARVIS: {reply}")
-            except KeyboardInterrupt:
-                print("\n[JARVIS] Text mode stopped.")
-                break
-            except Exception as exc:
-                print(f"[AGENT] {exc}")
-                print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
-        _stop_agent_worker()
-        return
-
-    try:
-        while True:
-            try:
-                record_audio(audio_path)
-                heard = transcribe(stt_client, audio_path)
-            except (OSError, sd.PortAudioError) as exc:
-                print(f"[MIC] {exc}")
-                speak("I cannot access the microphone. Please check your Windows audio device.")
-                time.sleep(2)
-                continue
-            except Exception as exc:
-                print(f"[STT] {exc}")
-                speak("Speech recognition failed. Please check the connection and GROQ API key.")
-                time.sleep(2)
-                continue
-
-            if not heard:
-                continue
-
-            print(f"Sir: {heard}")
-            normalized = " ".join(heard.lower().strip().split())
-            normalized = normalized.strip(".,!?;:")
-
-            shutdown_phrases = {
-                "shutdown jarvis",
-                "matikan jarvis",
-                "matikan diri",
-                "matikan diri sendiri",
-                "matikan dirimu",
-                "matikan diri lu",
-                "matikan diri lo",
-                "berhenti mendengarkan",
-                "matikan mode suara",
-                "stop jarvis",
-                "stop jervis",
-                "stop yervis",
-                "stop diri sendiri",
-                "jervis matikan diri lo",
-                "yervis matikan diri lo",
-                "surface matikan diri lo",
-            }
-
-            shutdown_words = set(normalized.split())
-            has_app_target = bool(shutdown_words & {
-                "kalkulator", "calculator", "notepad", "chrome", "word",
-                "vscode", "explorer", "aplikasi", "jendela"
-            })
-            shutdown_intent = (
-                normalized in shutdown_phrases
-                or (
-                    not has_app_target
-                    and ("matikan" in shutdown_words)
-                    and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"})
-                )
-                or normalized.startswith("matikan diri")
-                or normalized.startswith("stop jarvis")
-                or normalized.startswith("stop jervis")
-                or normalized.startswith("stop yervis")
-            )
-
-            if shutdown_intent:
-                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
-                speak("Understood, Sir. Shutting down the JARVIS system.")
-                return
-
-            direct_reply = try_direct_command(heard, None)
-            if direct_reply == "__JARVIS_STOP__":
-                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
-                speak("Understood, Sir. Shutting down the JARVIS system.")
-                return
-
-            try:
-                reply = run_agent_interruptible(heard, TEXT_MODE)
-                if reply == "__JARVIS_STOP__":
-                    speak("Understood, Sir. Shutting down the JARVIS system.")
-                    break
-                if reply == "__JARVIS_CANCELLED__":
-                    speak("Cancelled, Sir.")
-                    continue
-                if reply.startswith("__JARVIS_ERROR__:"):
-                    print(f"[AGENT] {reply}")
-                    speak("I could not process that request, Sir.")
-                    continue
-                if reply:
-                    speak(reply)
-            except KeyboardInterrupt:
-                print("\n[JARVIS] Dihentikan dari keyboard.")
-                break
-            except Exception as exc:
-                print(f"[AGENT] {exc}")
-                speak("I could not process that request, Sir. Please check the terminal log.")
-
-    except KeyboardInterrupt:
-        print("\n[JARVIS] Dihentikan dari keyboard.")
-    finally:
-        _stop_agent_worker()
-        try:
-            audio_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
-if __name__ == "__main__":
-    main()
