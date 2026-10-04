@@ -68,14 +68,21 @@ JARVIS_MEMORY = JarvisMemory()
 # Voice-mode action feedback: desktop actions stay silent and use a short local sound.
 # winsound is built into Windows, so no extra package or network request is needed.
 ACTION_FEEDBACK_ENABLED = os.getenv("JARVIS_ACTION_SOUND", "1").strip().lower() not in {"0", "false", "off", "no"}
+ACTION_SOUND_FILE = os.getenv("JARVIS_ACTION_SOUND_FILE", "").strip()
+if not ACTION_SOUND_FILE:
+    ACTION_SOUND_FILE = str(Path(__file__).resolve().parent / "sounds" / "action.wav")
 
 def play_action_feedback(success: bool = True) -> None:
     """Play a short audible local completion/error sound without network/TTS."""
     if not ACTION_FEEDBACK_ENABLED:
         return
     try:
-        # PlaySound with a generated WAV is much more reliable on modern Windows
-        # than winsound.Beep, which may be routed to an unavailable PC speaker.
+        # Use the user's WAV when available. Fall back to the generated tone.
+        custom_path = Path(ACTION_SOUND_FILE).expanduser()
+        if custom_path.exists() and custom_path.is_file() and custom_path.suffix.lower() == ".wav":
+            winsound.PlaySound(str(custom_path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+            return
+
         import math
         sfx_path = Path(__file__).resolve().with_name(".jarvis_action_sfx.wav")
         if not sfx_path.exists():
@@ -186,7 +193,11 @@ multi-step tasks and verify meaningful actions when practical. Never claim succe
 without a successful tool result.
 
 When Word is active, use word_control for Word-specific editing, formatting,
-selection, tables, reading, and saving.
+selection, tables, reading, and saving. For requests such as "make this bold",
+"bold this", "tebelin tulisan ini", or "ubah jadi tebal" when text is selected,
+use word_control with action=format_selection and bold=true. Use the matching
+italic or underline property for those requests. Do not prefer a generic hotkey
+when word_control can perform the formatting.
 
 High-impact, destructive, security-sensitive, externally consequential, or dangerous
 actions require the existing approval mechanism. Never bypass it. Never retrieve
@@ -245,7 +256,7 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"move_mouse","description":"Move the mouse to a screen coordinate without clicking.","parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}}},
     {"type":"function","function":{"name":"drag_mouse","description":"Drag the mouse from one screen coordinate to another.","parameters":{"type":"object","properties":{"start_x":{"type":"integer"},"start_y":{"type":"integer"},"end_x":{"type":"integer"},"end_y":{"type":"integer"},"duration":{"type":"number"}},"required":["start_x","start_y","end_x","end_y"]}}},
     {"type":"function","function":{"name":"hotkey","description":"Press a keyboard shortcut. Use normal shortcuts freely; high-impact system shortcuts may require approval.","parameters":{"type":"object","properties":{"keys":{"type":"string"}},"required":["keys"]}}},
-    {"type":"function","function":{"name":"word_control","description":"Deeply control Microsoft Word through its active document. Use for Word-specific writing, formatting, editing, selection, alignment, styles, font size, tables, reading document text, and saving. Actions: new_document, write, format_selection, select_all, insert_table, replace_text, read_document, save, save_as.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["new_document","write","format_selection","select_all","insert_table","replace_text","read_document","save","save_as"]},"text":{"type":"string"},"replacement":{"type":"string"},"font_size":{"type":"number"},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"underline":{"type":"boolean"},"alignment":{"type":"string","enum":["left","center","right","justify"]},"style":{"type":"string"},"rows":{"type":"integer"},"columns":{"type":"integer"},"path":{"type":"string"}},"required":["action"]}}},
+    {"type":"function","function":{"name":"word_control","description":"Deeply control Microsoft Word through its active document. Use for Word-specific writing, formatting, editing, selection, alignment, styles, bold, italic, underline, font size, tables, reading document text, and saving. For selected text, use action=format_selection with bold=true, italic=true, or underline=true. Actions: new_document, write, format_selection, select_all, insert_table, replace_text, read_document, save, save_as.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["new_document","write","format_selection","select_all","insert_table","replace_text","read_document","save","save_as"]},"text":{"type":"string"},"replacement":{"type":"string"},"font_size":{"type":"number"},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"underline":{"type":"boolean"},"alignment":{"type":"string","enum":["left","center","right","justify"]},"style":{"type":"string"},"rows":{"type":"integer"},"columns":{"type":"integer"},"path":{"type":"string"}},"required":["action"]}}},
 
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
     {"type":"function","function":{"name":"ui_tree","description":"Inspect any visible Windows app through the Win-Mind Microsoft UI Automation accessibility tree. Prefer this over screenshots when the app exposes accessible controls. Returns numbered elements/sections usable by ui_act.","parameters":{"type":"object","properties":{"title_contains":{"type":"string"},"process_contains":{"type":"string"},"ref":{"type":"integer"},"max_nodes":{"type":"integer"},"max_items":{"type":"integer"},"max_depth":{"type":"integer"},"include_offscreen":{"type":"boolean"}}}}},
@@ -746,7 +757,9 @@ def word_control(
             return "The text was written and formatted in Word successfully."
 
         if action == "format_selection":
-            fmt = sel.Font
+            if int(sel.Range.Start) == int(sel.Range.End) and any(v is not None for v in (bold, italic, underline, font_size)):
+                return "No text is selected in Word. Select the text to format first."
+            fmt = sel.Range.Font
             if bold is not None:
                 fmt.Bold = -1 if bold else 0
             if italic is not None:
