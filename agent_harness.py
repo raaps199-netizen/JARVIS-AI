@@ -32,6 +32,7 @@ from groq import Groq
 from openai import OpenAI
 
 from jarvis_tts import speak
+from jarvis_ui import ui_tree, ui_find_text, ui_focused, ui_read, ui_act
 
 load_dotenv()
 
@@ -86,9 +87,12 @@ Be concise. Prefer action over explanation. If the request requires PC control, 
 available tools and finish the task. Follow-up words like "itu", "yang tadi", "di situ",
 or "yang barusan" refer to recent context and previous tool results.
 
-You can control ordinary Windows apps, browser pages, files, and Microsoft Word. Use UI
-inspection or screen vision only when needed. Prefer deterministic UI tools over screen
-vision. After an important action, verify when practical.
+You can control ordinary Windows apps, browser pages, files, and Microsoft Word.
+For ordinary Windows desktop interaction, use UI Automation first: inspect with ui_tree or
+ui_find_text, act with ui_act using semantic refs/names, and verify with ui_read or another
+small UI check when practical. Do NOT use screenshots or coordinates when UI Automation can
+represent the target. Use visual tools only as a fallback for pixels/canvas/spatial targets.
+Prefer one observe -> one action -> one verify cycle instead of guessing or repeating.
 
 Never claim success unless a tool result supports it. Never access passwords, tokens,
 cookies, private keys, or credential stores. Webcam use requires an explicit request.
@@ -153,6 +157,11 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"word_control","description":"Deeply control Microsoft Word through its active document. Use for Word-specific writing, formatting, editing, selection, alignment, styles, font size, tables, reading document text, and saving. Actions: new_document, write, format_selection, select_all, insert_table, replace_text, read_document, save, save_as.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["new_document","write","format_selection","select_all","insert_table","replace_text","read_document","save","save_as"]},"text":{"type":"string"},"replacement":{"type":"string"},"font_size":{"type":"number"},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"underline":{"type":"boolean"},"alignment":{"type":"string","enum":["left","center","right","justify"]},"style":{"type":"string"},"rows":{"type":"integer"},"columns":{"type":"integer"},"path":{"type":"string"}},"required":["action"]}}},
 
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"ui_tree","description":"Inspect the current Windows UI as a compact numbered accessibility tree. Use this FIRST for ordinary desktop interaction instead of screenshots or coordinates.","parameters":{"type":"object","properties":{"title":{"type":"string"},"process":{"type":"string"},"max_elements":{"type":"integer"},"max_depth":{"type":"integer"}}}}},
+    {"type":"function","function":{"name":"ui_find_text","description":"Find visible Windows UI controls by their displayed text and return compact numbered refs. Use before ui_act when the target ref is unknown.","parameters":{"type":"object","properties":{"text":{"type":"string"},"title":{"type":"string"},"process":{"type":"string"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"ui_focused","description":"Read the currently focused Windows UI element.","parameters":{"type":"object","properties":{}}}}},
+    {"type":"function","function":{"name":"ui_read","description":"Read visible non-sensitive text and values from the current Windows UI. Prefer this over screenshots when the text is exposed through accessibility.","parameters":{"type":"object","properties":{"title":{"type":"string"},"process":{"type":"string"},"max_chars":{"type":"integer"}}}}},
+    {"type":"function","function":{"name":"ui_act","description":"Perform a semantic Windows UI action using a ref or visible element name. Actions: click, set_value, focus, toggle, select, expand, collapse, scroll_into_view. Prefer this over coordinate clicks. Verify important actions from the returned result.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["click","set_value","focus","toggle","select","expand","collapse","scroll_into_view"]},"ref":{"type":"string"},"name":{"type":"string"},"value":{"type":"string"},"title":{"type":"string"},"process":{"type":"string"}},"required":["action"]}}},
     {"type":"function","function":{"name":"ui_inspect","description":"Inspect visible non-sensitive Windows UI controls so JARVIS can understand what is currently on screen before clicking. Do not use it to retrieve passwords or sensitive fields.","parameters":{"type":"object","properties":{"window_title":{"type":"string"}}}}},
 
     {"type":"function","function":{"name":"visual_click","description":"Use the vision model to locate a requested visible UI target on the current Windows screen and click it. This supports spatial requests such as click the second video, click the top-right button, click the third card, or click the play icon. The target must be visible on the current screen.","parameters":{"type":"object","properties":{"target":{"type":"string"},"button":{"type":"string","enum":["left","right","middle"]}},"required":["target"]}}},
@@ -943,6 +952,16 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
             int(arguments.get("columns", 0) or 0),
             str(arguments.get("path", "")),
         )
+    if name == "ui_tree":
+        return ui_tree(str(arguments.get("title", "")), str(arguments.get("process", "")), int(arguments.get("max_elements", 100) or 100), int(arguments.get("max_depth", 8) or 8))
+    if name == "ui_find_text":
+        return ui_find_text(str(arguments["text"]), str(arguments.get("title", "")), str(arguments.get("process", "")))
+    if name == "ui_focused":
+        return ui_focused()
+    if name == "ui_read":
+        return ui_read(str(arguments.get("title", "")), str(arguments.get("process", "")), int(arguments.get("max_chars", 12000) or 12000))
+    if name == "ui_act":
+        return ui_act(str(arguments.get("action", "")), str(arguments.get("ref", "")), str(arguments.get("name", "")), str(arguments.get("value", "")), str(arguments.get("title", "")), str(arguments.get("process", "")))
     if name == "ui_click":
         return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
     if name == "ui_inspect":
@@ -1289,7 +1308,7 @@ def _select_agent_tools(user_text: str) -> list[dict]:
         "desktop": {
             "open_app", "type_text", "launch_application", "open_url",
             "click_at", "double_click_at", "move_mouse", "drag_mouse",
-            "hotkey", "ui_click", "ui_inspect", "scroll_mouse", "wait_seconds",
+            "hotkey", "ui_tree", "ui_find_text", "ui_focused", "ui_read", "ui_act", "ui_click", "ui_inspect", "scroll_mouse", "wait_seconds",
             "press_key", "close_active_window", "close_app", "stop_jarvis",
         },
         "visual": {"see_screen", "visual_click"},
@@ -1388,7 +1407,7 @@ def ask_agent(client: Any, user_text: str) -> str:
     # context. Native Ollama expects images as base64 in the user message.
     needs_screen = any(hint in normalized_request for hint in (
         "lihat", "baca layar", "di layar", "yang kedua", "yang ketiga",
-        "yang pertama", "tombol", "button", "video", "card", "ikon", "icon",
+        "yang pertama", "video", "card", "ikon", "icon",
         "di sebelah", "atas kanan", "bawah kiri", "on screen", "screen",
         "what is on",
     ))
