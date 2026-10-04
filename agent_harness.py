@@ -297,7 +297,8 @@ def search_web(query: str) -> str:
     try:
         url = "https://www.google.com/search?q=" + quote_plus(query)
         opened = webbrowser.open(url, new=2)
-        return f"Successfully searched Google for {query}." if opened else "The browser refused to open the search."    except OSError as exc:
+        return f"Successfully searched Google for {query}." if opened else "The browser refused to open the search."
+    except OSError as exc:
         return f"Gagal melakukan pencarian: {exc}"
 
 
@@ -596,7 +597,8 @@ def word_control(
                 inserted.Font.Italic = -1 if italic else 0
             if underline is not None:
                 inserted.Font.Underline = 1 if underline else 0
-            if font_size is not None:                inserted.Font.Size = float(font_size)
+            if font_size is not None:
+                inserted.Font.Size = float(font_size)
             if style:
                 try:
                     inserted.Style = style
@@ -895,7 +897,8 @@ def _vision_answer(client: Any, image_bytes: bytes, question: str, source: str) 
                 {"type":"text","text":f"JARVIS is viewing a {source}. Answer in concise Indonesian. Describe only what is visibly supported by the image. User asks: {question}"},
                 {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{encoded}"}}
             ]
-        }],        temperature=0.2,
+        }],
+        temperature=0.2,
         max_completion_tokens=700,
     )
     return (response.choices[0].message.content or "").strip()
@@ -1194,7 +1197,8 @@ def _perform_confirmed_launch_application(name: str) -> str:
     try:
         pyautogui.hotkey("win", "s")
         time.sleep(0.4)
-        pyperclip.copy(str(name))        pyautogui.hotkey("ctrl", "v")
+        pyperclip.copy(str(name))
+        pyautogui.hotkey("ctrl", "v")
         time.sleep(0.4)
         pyautogui.press("enter")
         return f"Requested Windows Search to open {name}."
@@ -1494,6 +1498,7 @@ def record_audio(path: Path) -> None:
             data, _ = stream.read(block_size)
             chunk = data.copy()
             energy = float(abs(chunk).mean())
+
             if energy >= ENERGY_THRESHOLD:
                 started = True
                 chunks.append(chunk)
@@ -1542,7 +1547,19 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
             normalized = normalized[len(prefix):].strip()
             break
 
-    # Fast text input: simple "ketik ..." commands bypass the LLM.\n    # Multi-step/contextual requests still go to the Computer Use agent.\n    for prefix in ("ketik ", "ketikkan ", "type "):\n        if normalized.startswith(prefix):\n            value = normalized[len(prefix):].strip()\n            if value:\n                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:\n                    value = value[1:-1]\n                result = type_text(value)\n                print(f"[DIRECT] type_text -> {result}")\n                return result\n\n    # Formatting is deterministic when a rich-text editor is active.\n    format_all = {\n        "buat tulisan bold": ("ctrl+b",),\n        "buat tulisannya bold": ("ctrl+b",),\n        "jadikan tulisan bold": ("ctrl+b",),\n        "buat tulisan italic": ("ctrl+i",),\n        "buat tulisannya italic": ("ctrl+i",),\n        "jadikan tulisan italic": ("ctrl+i",),\n        "buat tulisan bold dan italic": ("ctrl+b", "ctrl+i"),\n        "buat tulisannya bold dan italic": ("ctrl+b", "ctrl+i"),\n        "jadikan tulisan bold dan italic": ("ctrl+b", "ctrl+i"),\n        "bold dan italic": ("ctrl+b", "ctrl+i"),\n    }\n    if normalized in format_all:\n        process = _foreground_process_name().lower()\n        if process not in {"winword.exe", "wordpad.exe"}:\n            result = "Aplikasi aktif tidak mendukung format bold/italic. Gunakan Word atau WordPad."\n            print(f"[DIRECT] formatting -> {result}")\n            return result\n        pyautogui.hotkey("ctrl", "a")\n        for combo in format_all[normalized]:\n            pyautogui.hotkey(*combo.split("+"))\n        result = "Format tulisan berhasil diubah."\n        print(f"[DIRECT] formatting -> {result}")\n        return result\n\n    app_aliases = {
+    # Fast path: simple text input should never invoke the LLM agent.
+    # Multi-step/contextual requests still use the full Computer Use loop.
+    for prefix in ("ketik ", "ketikkan ", "type "):
+        if normalized.startswith(prefix):
+            value = normalized[len(prefix):].strip()
+            if value:
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                    value = value[1:-1]
+                result = type_text(value)
+                print(f"[DIRECT] type_text -> {result}")
+                return result
+
+    app_aliases = {
         "chrome": "chrome", "google chrome": "chrome",
         "notepad": "notepad", "notepad app": "notepad",
         "note pad": "notepad", "not pad": "notepad",
@@ -1792,7 +1809,8 @@ def main() -> None:
                 if direct_reply == "__JARVIS_STOP__":
                     print("[JARVIS] Text mode stopped.")
                     break
-                print(f"JARVIS: {direct_reply}")                continue
+                print(f"JARVIS: {direct_reply}")
+                continue
 
             try:
                 reply = ask_agent(llm_client, heard)
