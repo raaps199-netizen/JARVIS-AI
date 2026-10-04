@@ -15,6 +15,7 @@ import subprocess
 import multiprocessing
 import msvcrt
 import time
+import winsound
 import wave
 import webbrowser
 import pyautogui
@@ -61,6 +62,24 @@ VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 VISION_CLIENT = None
 JARVIS_MEMORY = JarvisMemory()
+
+# Voice-mode action feedback: desktop actions stay silent and use a short local sound.
+# winsound is built into Windows, so no extra package or network request is needed.
+ACTION_FEEDBACK_ENABLED = os.getenv("JARVIS_ACTION_SOUND", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+def play_action_feedback(success: bool = True) -> None:
+    """Play a short non-verbal completion/error sound for voice-mode actions."""
+    if not ACTION_FEEDBACK_ENABLED:
+        return
+    try:
+        if success:
+            winsound.Beep(880, 55)
+            winsound.Beep(1175, 75)
+        else:
+            winsound.Beep(330, 120)
+    except (RuntimeError, OSError):
+        # Audio feedback must never break the agent itself.
+        pass
 
 # Persistent worker state. Reusing the process removes Windows spawn + SDK initialization
 # from the critical path of every command. ESC can still terminate and recreate it.
@@ -1477,6 +1496,17 @@ def ask_agent(client: Any, user_text: str) -> str:
     if LLM_PROVIDER != "gemini":
         return _ask_agent_ollama(client, user_text)
 
+    # If at least one desktop action runs, voice mode should acknowledge it with
+    # a sound instead of reading the tool result aloud.
+    action_tools = {
+        "open_app", "open_site", "open_url", "open_folder", "open_path",
+        "launch_application", "type_text", "press_key", "hotkey",
+        "scroll_mouse", "click_at", "double_click_at", "move_mouse",
+        "drag_mouse", "ui_click", "ui_act", "word_control",
+        "close_app", "close_active_window",
+    }
+    did_action = False
+
     # Keep the tool loop alive for real multi-step Computer Use.
     # Tool selection is local and lexical, so we reduce prompt/tool-schema size
     # without adding another model round-trip.
@@ -1507,12 +1537,16 @@ def ask_agent(client: Any, user_text: str) -> str:
         if not function_calls:
             reply = (interaction.output_text or "").strip()
             _remember_turn(user_text, reply)
+            if did_action:
+                return "__JARVIS_ACTION_DONE__"
             return reply
 
         results = []
         for step in function_calls:
             tool_name = str(step.name)
             arguments = step.arguments if isinstance(step.arguments, dict) else json.loads(step.arguments or "{}")
+            if tool_name in action_tools:
+                did_action = True
             tool_started = time.perf_counter()
             result = _execute_agent_tool(tool_name, arguments, client)
             print(f"[LATENCY] Tool {tool_name}: {(time.perf_counter() - tool_started) * 1000:.0f} ms")
@@ -1553,7 +1587,7 @@ def ask_agent(client: Any, user_text: str) -> str:
             else:
                 reply = "Done, Sir. " + " ".join(successful)
             _remember_turn(user_text, reply)
-            return reply
+            return "__JARVIS_ACTION_DONE__"
 
         round_started = time.perf_counter()
         interaction = client.interactions.create(
@@ -2080,11 +2114,14 @@ def main() -> None:
                     speak("Understood, Sir. Shutting down the JARVIS system.")
                     break
                 if reply == "__JARVIS_CANCELLED__":
-                    speak("Cancelled, Sir.")
+                    play_action_feedback(False)
+                    continue
+                if reply == "__JARVIS_ACTION_DONE__":
+                    play_action_feedback(True)
                     continue
                 if reply.startswith("__JARVIS_ERROR__:"):
                     print(f"[AGENT] {reply}")
-                    speak("I could not process that request, Sir.")
+                    play_action_feedback(False)
                     continue
                 if reply:
                     speak(reply)
