@@ -1450,16 +1450,20 @@ def _execute_agent_tool(tool_name: str, arguments: dict[str, Any], client: Any) 
 
 
 def _select_tools_for_query(query: str, top_n: int = 10) -> list[dict[str, Any]]:
-    """Select a compact relevant tool set using the BM25-style idea from AnythingLLM."""
-    if len(TOOL_DECLARATIONS) <= top_n:
-        return _gemini_tool_declarations()
+    """Select a compact relevant tool set while preserving each provider's tool schema."""
+    # Groq/OpenAI Chat Completions expects:
+    #   {"type":"function","function":{"name":...,"parameters":...}}
+    # Gemini Interactions expects the flattened function declaration.
+    # Do not feed Gemini's schema to Groq, or Groq rejects it before inference.
+    declarations = _gemini_tool_declarations() if LLM_PROVIDER == "gemini" else TOOL_DECLARATIONS
+    if len(declarations) <= top_n:
+        return declarations
 
     def tokens(text: str) -> set[str]:
         return {x for x in __import__("re").findall(r"[a-zA-Z0-9_]{2,}", text.lower())}
 
     q = tokens(query)
     docs = []
-    declarations = _gemini_tool_declarations()
     for declaration in declarations:
         blob = " ".join([
             str(declaration.get("name", "")),
@@ -1697,7 +1701,6 @@ def _ask_agent_groq(client: Any, user_text: str) -> str:
             results.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
-                "name": tool_name,
                 "content": str(result),
             })
 
