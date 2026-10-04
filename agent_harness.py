@@ -1769,25 +1769,11 @@ def run_agent_interruptible(user_text: str, text_mode: bool) -> str:
 
 
 def main() -> None:
-    try:
-        llm_client = build_llm_client()
-    except RuntimeError as exc:
-        print(str(exc))
+    # The persistent worker owns the Gemini/Groq clients. Keeping duplicate clients
+    # in the parent process only wastes RAM on Windows.
+    if not TEXT_MODE and not GROQ_API_KEY:
+        print("GROQ_API_KEY belum diatur. Voice mode saat ini memakai Groq hanya untuk STT.")
         return
-
-    stt_client = None
-    if not TEXT_MODE:
-        if not GROQ_API_KEY:
-            print("GROQ_API_KEY belum diatur. Voice mode saat ini memakai Groq hanya untuk STT.")
-            return
-        stt_client = Groq(api_key=GROQ_API_KEY)
-
-    global CONFIRMATION_CALLBACK
-    CONFIRMATION_CALLBACK = (
-        (lambda description: confirm_action_via_text(description))
-        if TEXT_MODE
-        else (lambda description: confirm_action_via_voice(stt_client, description))
-    )
     if not TEXT_MODE:
         speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
@@ -1823,7 +1809,7 @@ def main() -> None:
                 print("JARVIS: Understood, Sir. Shutting down the JARVIS system.")
                 break
 
-            direct_reply = try_direct_command(heard, llm_client)
+            direct_reply = try_direct_command(heard, None)
             if direct_reply == "__JARVIS_STOP__":
                 print("[JARVIS] Text mode stopped.")
                 break
