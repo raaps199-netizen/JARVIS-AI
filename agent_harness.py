@@ -37,6 +37,7 @@ load_dotenv()
 LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "ollama").strip().lower()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b").strip()
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
@@ -66,6 +67,7 @@ def chat_create(client: Any, **kwargs):
     if LLM_PROVIDER == "ollama":
         extra_body = dict(kwargs.pop("extra_body", {}) or {})
         extra_body["think"] = False
+        extra_body["num_ctx"] = OLLAMA_NUM_CTX
         kwargs["extra_body"] = extra_body
     return client.chat.completions.create(**kwargs)
 
