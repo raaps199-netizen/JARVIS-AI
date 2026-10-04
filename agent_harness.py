@@ -1813,7 +1813,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[AGENT] {exc}")
                 print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
-    return
+        return
 
     try:
         while True:
