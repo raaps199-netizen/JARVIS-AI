@@ -117,8 +117,8 @@ For an obvious single action, make one tool call immediately. Choose the smalles
 appropriate tool: open_app/open_site/open_url, close_app, type_text, press_key/hotkey,
 scroll_mouse, word_control, or other matching tool.
 
-For contextual or visual tasks, use Computer Use. Prefer ui_inspect for accessible UI;
-use see_screen/visual_click when spatial or pixel information is needed. Complete
+For contextual or visual tasks, use Computer Use. Prefer the Win-Mind UI Automation tools ui_tree/ui_map/ui_act/ui_read/ui_focused/ui_find_text for accessible UI;
+use the older ui_inspect only as a fallback. Use see_screen/visual_click when spatial or pixel information is needed. Complete
 multi-step tasks and verify meaningful actions when practical. Never claim success
 without a successful tool result.
 
