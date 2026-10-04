@@ -34,6 +34,10 @@ from groq import Groq
 from openai import OpenAI
 from google import genai
 from jarvis_memory import JarvisMemory
+try:
+    import winmind_ext_uimap as winmind_uia
+except Exception:
+    winmind_uia = None
 
 from jarvis_tts import speak
 
@@ -181,6 +185,13 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"word_control","description":"Deeply control Microsoft Word through its active document. Use for Word-specific writing, formatting, editing, selection, alignment, styles, font size, tables, reading document text, and saving. Actions: new_document, write, format_selection, select_all, insert_table, replace_text, read_document, save, save_as.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["new_document","write","format_selection","select_all","insert_table","replace_text","read_document","save","save_as"]},"text":{"type":"string"},"replacement":{"type":"string"},"font_size":{"type":"number"},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"underline":{"type":"boolean"},"alignment":{"type":"string","enum":["left","center","right","justify"]},"style":{"type":"string"},"rows":{"type":"integer"},"columns":{"type":"integer"},"path":{"type":"string"}},"required":["action"]}}},
 
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"ui_tree","description":"Inspect any visible Windows app through the Win-Mind Microsoft UI Automation accessibility tree. Prefer this over screenshots when the app exposes accessible controls. Returns numbered elements/sections usable by ui_act.","parameters":{"type":"object","properties":{"title_contains":{"type":"string"},"process_contains":{"type":"string"},"ref":{"type":"integer"},"max_nodes":{"type":"integer"},"max_items":{"type":"integer"},"max_depth":{"type":"integer"},"include_offscreen":{"type":"boolean"}}}}},
+    {"type":"function","function":{"name":"ui_map","description":"Map the current Windows app as a compact numbered accessibility list of interactive controls. Finds apps by title/process and can wake Chromium/Electron/WebView2 accessibility.","parameters":{"type":"object","properties":{"title_contains":{"type":"string"},"process_contains":{"type":"string"},"query":{"type":"string"},"scope":{"type":"string","enum":["interactive","all"]},"include_offscreen":{"type":"boolean"},"max_elements":{"type":"integer"},"format":{"type":"string","enum":["lines","json"]},"restore_minimized":{"type":"boolean"}}}}},
+    {"type":"function","function":{"name":"ui_act","description":"Act on a Windows UI Automation element by accessibility ref or visible name. Supports click, double_click, right_click, toggle, set_value, expand, collapse, select, focus, scroll, and scroll_into_view. Use after ui_tree/ui_map.","parameters":{"type":"object","properties":{"name":{"type":"string"},"names":{"type":"array","items":{"type":"string"}},"title_contains":{"type":"string"},"process_contains":{"type":"string"},"ref":{"type":"integer"},"refs":{"type":"array","items":{"type":"integer"}},"action":{"type":"string","enum":["click","double_click","right_click","toggle","set_value","expand","collapse","select","focus","scroll","scroll_into_view"]},"value":{"type":"string"},"press_enter":{"type":"boolean"},"use_keyboard":{"type":"boolean"}}}}},
+    {"type":"function","function":{"name":"ui_read","description":"Read visible text from the current Windows app through Microsoft UI Automation, without screenshots.","parameters":{"type":"object","properties":{"title_contains":{"type":"string"},"process_contains":{"type":"string"},"max_chars":{"type":"integer"},"full":{"type":"boolean"}}}}},
+    {"type":"function","function":{"name":"ui_focused","description":"Return the Windows accessibility element that currently has keyboard focus.","parameters":{"type":"object","properties":{}}}},
+    {"type":"function","function":{"name":"ui_find_text","description":"Find visible text inside a Windows app using the accessibility tree and return matching elements/rectangles.","parameters":{"type":"object","properties":{"text":{"type":"string"},"title_contains":{"type":"string"},"process_contains":{"type":"string"},"max_results":{"type":"integer"}},"required":["text"]}}},
+    {"type":"function","function":{"name":"ui_element_at","description":"Identify the accessible Windows UI element at a screen coordinate and return a ref for ui_act.","parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}}},
     {"type":"function","function":{"name":"ui_inspect","description":"Inspect visible non-sensitive Windows UI controls so JARVIS can understand what is currently on screen before clicking. Do not use it to retrieve passwords or sensitive fields.","parameters":{"type":"object","properties":{"window_title":{"type":"string"}}}}},
 
     {"type":"function","function":{"name":"visual_click","description":"Use the vision model to locate a requested visible UI target on the current Windows screen and click it. This supports spatial requests such as click the second video, click the top-right button, click the third card, or click the play icon. The target must be visible on the current screen.","parameters":{"type":"object","properties":{"target":{"type":"string"},"button":{"type":"string","enum":["left","right","middle"]}},"required":["target"]}}},
@@ -980,6 +991,26 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
         return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
     if name == "ui_inspect":
         return ui_inspect(str(arguments.get("window_title","")))
+    if name in {"ui_tree","ui_map","ui_act","ui_read","ui_focused","ui_find_text","ui_element_at"}:
+        if winmind_uia is None:
+            return "Win-Mind UI Automation module is not installed. Copy winmind_ext_uimap.py into the JARVIS project."
+        try:
+            if name == "ui_tree":
+                return json.dumps(winmind_uia.ui_tree(**{k:v for k,v in arguments.items() if v is not None}), ensure_ascii=False)
+            if name == "ui_map":
+                return json.dumps(winmind_uia.ui_map(**{k:v for k,v in arguments.items() if v is not None}), ensure_ascii=False)
+            if name == "ui_act":
+                return json.dumps(winmind_uia.ui_act(**{k:v for k,v in arguments.items() if v is not None}), ensure_ascii=False)
+            if name == "ui_read":
+                return json.dumps(winmind_uia.ui_read(**{k:v for k,v in arguments.items() if v is not None}), ensure_ascii=False)
+            if name == "ui_focused":
+                return json.dumps(winmind_uia.ui_focused(), ensure_ascii=False)
+            if name == "ui_find_text":
+                return json.dumps(winmind_uia.ui_find_text(**{k:v for k,v in arguments.items() if v is not None}), ensure_ascii=False)
+            if name == "ui_element_at":
+                return json.dumps(winmind_uia.ui_element_at(**{k:v for k,v in arguments.items() if v is not None}), ensure_ascii=False)
+        except Exception as exc:
+            return f"Win-Mind UIA error: {type(exc).__name__}: {exc}"
     if name == "visual_click":
         if client is None:
             return "Vision is unavailable because no active vision client is available."
