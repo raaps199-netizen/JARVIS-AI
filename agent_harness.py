@@ -55,7 +55,8 @@ STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "Computer commands in Indonesian or En
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 VISION_CLIENT = None
-LAST_OPENED_APP = None
+
+# Persistent worker state. Reusing the process removes Windows spawn + SDK initialization\n# from the critical path of every command. ESC can still terminate and recreate it.\n_AGENT_WORKER = None\n_AGENT_PARENT_CONN = None\n_AGENT_WORKER_CTX = None\nLAST_OPENED_APP = None
 TEXT_MODE = "--text" in sys.argv or os.getenv("JARVIS_TEXT_MODE", "").lower() in {"1", "true", "yes", "on"}
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
@@ -1558,8 +1559,8 @@ def confirm_action_via_voice(client: Any, description: str) -> bool:
     return False
 
 
-def _agent_worker(user_text: str, text_mode: bool, result_conn) -> None:
-    """Run one agent request in an isolated process so the parent can kill it instantly."""
+def _agent_worker_loop(request_conn, result_conn, text_mode: bool) -> None:
+    """Keep one initialized agent process alive for many requests."""
     try:
         client = build_llm_client()
 
@@ -1577,8 +1578,25 @@ def _agent_worker(user_text: str, text_mode: bool, result_conn) -> None:
                 worker_stt_client, description
             )
 
-        reply = ask_agent(client, user_text)
-        result_conn.send(("ok", reply))
+        result_conn.send(("ready", "Agent worker ready."))
+
+        while True:
+            try:
+                user_text = request_conn.recv()
+            except (EOFError, OSError):
+                break
+
+            if user_text is None:
+                break
+
+            try:
+                reply = ask_agent(client, str(user_text))
+                result_conn.send(("ok", reply))
+            except BaseException as exc:
+                try:
+                    result_conn.send(("error", f"{type(exc).__name__}: {exc}"))
+                except Exception:
+                    pass
     except BaseException as exc:
         try:
             result_conn.send(("error", f"{type(exc).__name__}: {exc}"))
@@ -1586,70 +1604,137 @@ def _agent_worker(user_text: str, text_mode: bool, result_conn) -> None:
             pass
     finally:
         try:
+            request_conn.close()
+        except Exception:
+            pass
+        try:
             result_conn.close()
         except Exception:
             pass
 
 
-def run_agent_interruptible(user_text: str, text_mode: bool) -> str:
-    """Run the agent in a killable worker process.
+def _stop_agent_worker() -> None:
+    """Stop the persistent worker and clear its IPC state."""
+    global _AGENT_WORKER, _AGENT_PARENT_CONN, _AGENT_WORKER_CTX
 
-    Press Esc while JARVIS is processing to terminate the current request immediately.
-    This is intentionally a process boundary because a blocked HTTP/Ollama call cannot
-    be reliably cancelled from the same Python thread.
-    """
+    conn = _AGENT_PARENT_CONN
+    worker = _AGENT_WORKER
+    _AGENT_PARENT_CONN = None
+    _AGENT_WORKER = None
+    _AGENT_WORKER_CTX = None
+
+    if conn is not None:
+        try:
+            conn.send(None)
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if worker is not None:
+        try:
+            if worker.is_alive():
+                worker.join(timeout=0.35)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=0.75)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=0.5)
+        except Exception:
+            pass
+
+
+def _start_agent_worker(text_mode: bool) -> bool:
+    """Start and warm one reusable worker before the first user request."""
+    global _AGENT_WORKER, _AGENT_PARENT_CONN, _AGENT_WORKER_CTX
+
+    _stop_agent_worker()
+
     ctx = multiprocessing.get_context("spawn")
-    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    parent_conn, child_conn = ctx.Pipe(duplex=True)
     worker = ctx.Process(
-        target=_agent_worker,
-        args=(user_text, text_mode, child_conn),
+        target=_agent_worker_loop,
+        args=(child_conn, child_conn, text_mode),
         daemon=True,
     )
     worker.start()
     child_conn.close()
 
+    _AGENT_WORKER_CTX = ctx
+    _AGENT_WORKER = worker
+    _AGENT_PARENT_CONN = parent_conn
+
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if parent_conn.poll(0.05):
+            status, payload = parent_conn.recv()
+            if status == "ready":
+                print("[AGENT] Persistent worker ready.")
+                return True
+            print(f"[AGENT] Worker startup failed: {payload}")
+            _stop_agent_worker()
+            return False
+        if not worker.is_alive():
+            print(f"[AGENT] Worker exited during startup with code {worker.exitcode}.")
+            _stop_agent_worker()
+            return False
+
+    print("[AGENT] Worker startup timed out.")
+    _stop_agent_worker()
+    return False
+
+
+def run_agent_interruptible(user_text: str, text_mode: bool) -> str:
+    """Send one request to the persistent worker; ESC still hard-stops it."""
+    global _AGENT_WORKER, _AGENT_PARENT_CONN
+
+    if _AGENT_WORKER is None or not _AGENT_WORKER.is_alive() or _AGENT_PARENT_CONN is None:
+        if not _start_agent_worker(text_mode):
+            return "__JARVIS_ERROR__:failed to start agent worker"
+
+    worker = _AGENT_WORKER
+    conn = _AGENT_PARENT_CONN
+
     try:
+        conn.send(str(user_text))
+
         while worker.is_alive():
+            if conn.poll(0.05):
+                status, payload = conn.recv()
+                if status == "ok":
+                    return payload
+                if status == "error":
+                    return f"__JARVIS_ERROR__:{payload}"
+                continue
+
             if msvcrt.kbhit():
                 key = msvcrt.getwch()
                 if key == "\x1b":
                     print("\n[AGENT] ESC detected. Force-stopping the current request...")
-                    worker.terminate()
-                    worker.join(timeout=1.5)
-                    if worker.is_alive():
-                        worker.kill()
-                        worker.join(timeout=1)
+                    _stop_agent_worker()
                     return "__JARVIS_CANCELLED__"
-            time.sleep(0.05)
 
-        if parent_conn.poll(0.2):
-            status, payload = parent_conn.recv()
+        if conn.poll(0.1):
+            status, payload = conn.recv()
             if status == "ok":
                 return payload
-            return f"__JARVIS_ERROR__:{payload}"
+            if status == "error":
+                return f"__JARVIS_ERROR__:{payload}"
 
-        if worker.exitcode not in (0, None):
-            return f"__JARVIS_ERROR__:agent worker exited with code {worker.exitcode}"
+        exitcode = worker.exitcode
+        _stop_agent_worker()
+        return f"__JARVIS_ERROR__:agent worker exited with code {exitcode}"
 
-        return ""
+    except (EOFError, OSError, BrokenPipeError) as exc:
+        _stop_agent_worker()
+        return f"__JARVIS_ERROR__:agent worker IPC failed: {exc}"
     except KeyboardInterrupt:
         print("\n[AGENT] Keyboard interrupt. Force-stopping the current request...")
-        if worker.is_alive():
-            worker.terminate()
-            worker.join(timeout=1.5)
-            if worker.is_alive():
-                worker.kill()
-                worker.join(timeout=1)
+        _stop_agent_worker()
         return "__JARVIS_CANCELLED__"
-    finally:
-        try:
-            parent_conn.close()
-        except Exception:
-            pass
-        if worker.is_alive():
-            worker.terminate()
-            worker.join(timeout=1)
-
 
 
 def main() -> None:
@@ -1675,6 +1760,8 @@ def main() -> None:
     if not TEXT_MODE:
         speak("System online, Sir. I am ready to listen.")
     audio_path = Path(__file__).resolve().with_name(".jarvis_input.wav")
+
+    _start_agent_worker(TEXT_MODE)
 
     if TEXT_MODE:
         print(f"JARVIS text mode online, Sir. LLM: {LLM_PROVIDER}/{MODEL}")
@@ -1730,6 +1817,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"[AGENT] {exc}")
                 print("JARVIS: I could not process that request, Sir. Please check the terminal log.")
+        _stop_agent_worker()
         return
 
     try:
@@ -1827,6 +1915,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[JARVIS] Dihentikan dari keyboard.")
     finally:
+        _stop_agent_worker()
         try:
             audio_path.unlink(missing_ok=True)
         except OSError:
