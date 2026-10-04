@@ -56,7 +56,12 @@ VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 VISION_CLIENT = None
 
-# Persistent worker state. Reusing the process removes Windows spawn + SDK initialization\n# from the critical path of every command. ESC can still terminate and recreate it.\n_AGENT_WORKER = None\n_AGENT_PARENT_CONN = None\n_AGENT_WORKER_CTX = None\nLAST_OPENED_APP = None
+# Persistent worker state. Reusing the process removes Windows spawn + SDK initialization
+# from the critical path of every command. ESC can still terminate and recreate it.
+_AGENT_WORKER = None
+_AGENT_PARENT_CONN = None
+_AGENT_WORKER_CTX = None
+LAST_OPENED_APP = None
 TEXT_MODE = "--text" in sys.argv or os.getenv("JARVIS_TEXT_MODE", "").lower() in {"1", "true", "yes", "on"}
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
