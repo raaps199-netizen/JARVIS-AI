@@ -46,8 +46,8 @@ OLLAMA_NATIVE_BASE_URL = os.getenv("OLLAMA_NATIVE_BASE_URL", "http://localhost:1
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m").strip()
 MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
-STT_LANGUAGE = os.getenv("GROQ_STT_LANGUAGE", "id").strip() or None
-STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "Perintah komputer bahasa Indonesia dan Inggris. Pertahankan nama aplikasi seperti YouTube, Chrome, Word, Notepad, VS Code, Google, GitHub.")
+STT_LANGUAGE = os.getenv("GROQ_STT_LANGUAGE", "").strip() or None
+STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "Computer commands in Indonesian or English. Keep app and site names exactly: YouTube, Chrome, Word, Notepad, VS Code, Google, GitHub.")
 VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
 LAST_OPENED_APP = None
