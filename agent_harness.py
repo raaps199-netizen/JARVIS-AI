@@ -1334,6 +1334,17 @@ def ask_agent(client: Any, user_text: str) -> str:
     if LLM_PROVIDER != "gemini":
         return _ask_agent_ollama(client, user_text)
 
+    # One-step desktop actions do not need a second Gemini round just to narrate
+    # the successful tool result. This keeps semantic routing while removing a full
+    # network/model round-trip from the common path.
+    FAST_RETURN_TOOLS = {
+        "open_app", "open_site", "open_url", "open_folder", "open_path",
+        "launch_application", "search_web", "type_text", "press_key", "hotkey",
+        "click_at", "double_click_at", "move_mouse", "drag_mouse", "scroll_mouse",
+        "ui_click", "ui_inspect", "visual_click", "word_control", "wait_seconds",
+        "create_folder", "read_file", "list_directory",
+    }
+
     tools = _gemini_tool_declarations()
     generation_config = {"thinking_level": GEMINI_THINKING_LEVEL}
     interaction = client.interactions.create(
@@ -1358,6 +1369,9 @@ def ask_agent(client: Any, user_text: str) -> str:
 
             if result == "__JARVIS_STOP__":
                 return "__JARVIS_STOP__"
+
+            if len(function_calls) == 1 and tool_name in FAST_RETURN_TOOLS:
+                return str(result)
 
             results.append({
                 "type": "function_result",
