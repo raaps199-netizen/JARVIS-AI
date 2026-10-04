@@ -32,24 +32,29 @@ import speech_recognition as sr
 from dotenv import load_dotenv
 from groq import Groq
 from openai import OpenAI
+from google import genai
 
 from jarvis_tts import speak
 
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "ollama").strip().lower()
+LLM_PROVIDER = os.getenv("JARVIS_LLM_PROVIDER", "gemini").strip().lower()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "low").strip().lower()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:2b").strip()
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
 OLLAMA_NATIVE_BASE_URL = os.getenv("OLLAMA_NATIVE_BASE_URL", "http://localhost:11434").strip().rstrip("/")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m").strip()
-MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+MODEL = GEMINI_MODEL if LLM_PROVIDER == "gemini" else OLLAMA_MODEL
 STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
 STT_LANGUAGE = os.getenv("GROQ_STT_LANGUAGE", "").strip() or None
 STT_PROMPT = os.getenv("GROQ_STT_PROMPT", "Computer commands in Indonesian or English. Keep app and site names exactly: YouTube, Chrome, Word, Notepad, VS Code, Google, GitHub.")
-VISION_MODEL = OLLAMA_MODEL if LLM_PROVIDER == "ollama" else os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 CONFIRMATION_CALLBACK = None
+VISION_CLIENT = None
 LAST_OPENED_APP = None
 TEXT_MODE = "--text" in sys.argv or os.getenv("JARVIS_TEXT_MODE", "").lower() in {"1", "true", "yes", "on"}
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -62,16 +67,18 @@ START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
 
 def build_llm_client():
-    """Create the configured reasoning/vision client."""
+    """Create the configured reasoning client."""
+    if LLM_PROVIDER == "gemini":
+        if not GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY belum diatur.")
+        return genai.Client(api_key=GEMINI_API_KEY)
     if LLM_PROVIDER == "ollama":
         return OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL, timeout=OLLAMA_TIMEOUT_SECONDS, max_retries=0)
-    if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY belum diatur.")
-    return Groq(api_key=GROQ_API_KEY)
+    raise RuntimeError(f"Unsupported JARVIS_LLM_PROVIDER: {LLM_PROVIDER}")
 
 
 def chat_create(client: Any, **kwargs):
-    """Call the active chat backend with local Ollama optimizations."""
+    """Call the legacy chat backend used by the local Groq vision tools."""
     if LLM_PROVIDER == "ollama":
         extra_body = dict(kwargs.pop("extra_body", {}) or {})
         extra_body["think"] = False
@@ -81,6 +88,10 @@ def chat_create(client: Any, **kwargs):
         extra_body["options"] = options
         extra_body["keep_alive"] = OLLAMA_KEEP_ALIVE
         kwargs["extra_body"] = extra_body
+    elif LLM_PROVIDER == "gemini":
+        if VISION_CLIENT is None:
+            raise RuntimeError("Groq vision client belum tersedia.")
+        client = VISION_CLIENT
     return client.chat.completions.create(**kwargs)
 
 
@@ -1245,22 +1256,140 @@ def request_confirmation(description: str) -> bool:
 
 
 
-def ask_agent(client: Any, user_text: str) -> str:
-    # Do not guess from keywords. The agent decides whether it needs to inspect the
-    # desktop and can call ui_inspect/see_screen/visual_click as part of Computer Use.
-    # This keeps natural-language commands language-independent.
-    user_content: Any = user_text
+def _gemini_tool_declarations() -> list[dict[str, Any]]:
+    """Convert the existing OpenAI-style declarations to Gemini Interactions format."""
+    tools = []
+    for declaration in TOOL_DECLARATIONS:
+        fn = declaration.get("function", {})
+        tools.append({
+            "type": "function",
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+        })
+    return tools
 
+
+def _execute_agent_tool(tool_name: str, arguments: dict[str, Any], client: Any) -> str:
+    """Run one tool while preserving JARVIS's existing approval rules."""
+    try:
+        if tool_name == "type_text" and _terminal_is_foreground():
+            approval = request_confirmation(
+                "Type the requested text into the active terminal window. This may execute commands or alter system state."
+            )
+            if not approval:
+                return "The user denied typing into the terminal."
+            result = run_tool(tool_name, arguments, client)
+        elif tool_name == "ui_click" and any(
+            word in str(arguments.get("text", "")).lower() for word in RISKY_UI_WORDS
+        ):
+            approval = request_confirmation(
+                f"Click the potentially consequential control '{arguments.get('text')}'."
+            )
+            if not approval:
+                return "The user denied this consequential UI action."
+            result = run_tool(tool_name, arguments, client)
+        else:
+            result = run_tool(tool_name, arguments, client)
+
+        if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):
+            description = result.split(":", 1)[1].strip()
+            approval = request_confirmation(description)
+            if not approval:
+                return "The user denied the high-impact action."
+            if tool_name == "delete_path":
+                return _perform_confirmed_delete(
+                    str(arguments["path"]),
+                    bool(arguments.get("recursive", False)),
+                )
+            if tool_name == "write_file":
+                return _perform_confirmed_write(
+                    str(arguments["path"]),
+                    str(arguments["content"]),
+                )
+            if tool_name == "launch_application":
+                return _perform_confirmed_launch_application(str(arguments["name"]))
+            if tool_name == "hotkey":
+                return _perform_confirmed_hotkey(str(arguments["keys"]))
+            if tool_name == "move_path":
+                return _perform_confirmed_move(
+                    str(arguments["source"]),
+                    str(arguments["destination"]),
+                )
+            if tool_name == "rename_path":
+                return _perform_confirmed_rename(
+                    str(arguments["path"]),
+                    str(arguments["new_name"]),
+                )
+            return f"Approved high-impact action, but no executor is registered for {tool_name}."
+
+        return result
+    except Exception as exc:
+        return f"Tool error: {exc}"
+
+
+def ask_agent(client: Any, user_text: str) -> str:
+    """Run JARVIS through Gemini Interactions API with real client-side function calling."""
+    if LLM_PROVIDER != "gemini":
+        return _ask_agent_ollama(client, user_text)
+
+    tools = _gemini_tool_declarations()
+    generation_config = {"thinking_level": GEMINI_THINKING_LEVEL}
+    interaction = client.interactions.create(
+        model=GEMINI_MODEL,
+        system_instruction=SYSTEM_PROMPT,
+        input=user_text,
+        tools=tools,
+        generation_config=generation_config,
+    )
+
+    for _ in range(6):
+        function_calls = [step for step in interaction.steps if step.type == "function_call"]
+        if not function_calls:
+            return (interaction.output_text or "").strip()
+
+        results = []
+        for step in function_calls:
+            tool_name = str(step.name)
+            arguments = step.arguments if isinstance(step.arguments, dict) else json.loads(step.arguments or "{}")
+            result = _execute_agent_tool(tool_name, arguments, client)
+            print(f"[TOOL] {tool_name} -> {result}")
+
+            if result == "__JARVIS_STOP__":
+                return "__JARVIS_STOP__"
+
+            results.append({
+                "type": "function_result",
+                "name": tool_name,
+                "call_id": step.id,
+                "result": [{"type": "text", "text": str(result)}],
+            })
+
+        interaction = client.interactions.create(
+            model=GEMINI_MODEL,
+            previous_interaction_id=interaction.id,
+            system_instruction=SYSTEM_PROMPT,
+            input=results,
+            tools=tools,
+            generation_config=generation_config,
+        )
+
+    return "I stopped after several tool steps to avoid an infinite loop."
+
+
+def _ask_agent_ollama(client: Any, user_text: str) -> str:
+    """Legacy Ollama path kept as a fallback."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
+        {"role": "user", "content": user_text},
     ]
 
     for _ in range(6):
-        response = chat_create(client, 
+        response = chat_create(
+            client,
             model=MODEL,
             messages=messages,
-            tools=TOOLS,
+            tools=TOOL_DECLARATIONS,
             tool_choice="auto",
             temperature=0.1,
             max_completion_tokens=256,
@@ -1277,57 +1406,7 @@ def ask_agent(client: Any, user_text: str) -> str:
                 tool_name = tool_call.function.name
                 raw_arguments = tool_call.function.arguments or "{}"
                 arguments = raw_arguments if isinstance(raw_arguments, dict) else json.loads(raw_arguments)
-
-                if tool_name == "type_text" and _terminal_is_foreground():
-                    approval = request_confirmation(
-                        f"Type the requested text into the active terminal window. This may execute commands or alter system state."
-                    )
-                    if not approval:
-                        result = "The user denied typing into the terminal."
-                    else:
-                        result = run_tool(tool_name, arguments, client)
-                elif tool_name == "ui_click" and any(word in str(arguments.get("text", "")).lower() for word in RISKY_UI_WORDS):
-                    approval = request_confirmation(
-                        f"Click the potentially consequential control '{arguments.get('text')}'."
-                    )
-                    if not approval:
-                        result = "The user denied this consequential UI action."
-                    else:
-                        result = run_tool(tool_name, arguments, client)
-                else:
-                    result = run_tool(tool_name, arguments, client)
-
-                if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):
-                    description = result.split(":", 1)[1].strip()
-                    approval = request_confirmation(description)
-                    if not approval:
-                        result = "The user denied the high-impact action."
-                    elif tool_name == "delete_path":
-                        result = _perform_confirmed_delete(
-                            str(arguments["path"]),
-                            bool(arguments.get("recursive", False)),
-                        )
-                    elif tool_name == "write_file":
-                        result = _perform_confirmed_write(
-                            str(arguments["path"]),
-                            str(arguments["content"]),
-                        )
-                    elif tool_name == "launch_application":
-                        result = _perform_confirmed_launch_application(str(arguments["name"]))
-                    elif tool_name == "hotkey":
-                        result = _perform_confirmed_hotkey(str(arguments["keys"]))
-                    elif tool_name == "move_path":
-                        result = _perform_confirmed_move(
-                            str(arguments["source"]),
-                            str(arguments["destination"]),
-                        )
-                    elif tool_name == "rename_path":
-                        result = _perform_confirmed_rename(
-                            str(arguments["path"]),
-                            str(arguments["new_name"]),
-                        )
-                    else:
-                        result = f"Approved high-impact action, but no executor is registered for {tool_name}."
+                result = _execute_agent_tool(tool_name, arguments, client)
             except Exception as exc:
                 result = f"Tool error: {exc}"
 
@@ -1484,7 +1563,10 @@ def _agent_worker(user_text: str, text_mode: bool, result_conn) -> None:
     try:
         client = build_llm_client()
 
-        global CONFIRMATION_CALLBACK
+        global CONFIRMATION_CALLBACK, VISION_CLIENT
+        if GROQ_API_KEY:
+            VISION_CLIENT = Groq(api_key=GROQ_API_KEY)
+
         if text_mode:
             CONFIRMATION_CALLBACK = lambda description: confirm_action_via_text(description)
         else:
