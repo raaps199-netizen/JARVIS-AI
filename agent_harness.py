@@ -963,7 +963,8 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
     if name == "write_file":
         return write_file(str(arguments["path"]), str(arguments["content"]))
     if name == "create_folder":
-        return create_folder(str(arguments["path"]))    if name == "rename_path":
+        return create_folder(str(arguments["path"]))
+    if name == "rename_path":
         return rename_path(str(arguments["path"]), str(arguments["new_name"]))
     if name == "move_path":
         return move_path(str(arguments["source"]), str(arguments["destination"]))
