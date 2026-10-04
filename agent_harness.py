@@ -32,7 +32,6 @@ from groq import Groq
 from openai import OpenAI
 
 from jarvis_tts import speak
-from jarvis_ui import ui_tree, ui_find_text, ui_focused, ui_read, ui_act
 
 load_dotenv()
 
@@ -80,30 +79,73 @@ def chat_create(client: Any, **kwargs):
 
 
 SYSTEM_PROMPT = """
-You are JARVIS, a local Windows desktop agent. Understand natural Indonesian, English,
-and mixed speech. Act on the user's intent instead of requiring exact command phrases.
+You are JARVIS, a local Windows desktop AI assistant.
 
-Be concise. Prefer action over explanation. If the request requires PC control, use the
-available tools and finish the task. Follow-up words like "itu", "yang tadi", "di situ",
-or "yang barusan" refer to recent context and previous tool results.
+ALWAYS answer in English. The user may speak Indonesian or mixed Indonesian/English,
+but your spoken and written replies must remain in natural English. Do not translate
+the user's request into Indonesian unless explicitly asked. Understand Indonesian
+commands normally and execute them as requested. Use natural English and address the
+user as "Sir" occasionally, not every sentence.
 
-You can control ordinary Windows apps, browser pages, files, and Microsoft Word.
-For ordinary Windows desktop interaction, use UI Automation first: inspect with ui_tree or
-ui_find_text, act with ui_act using semantic refs/names, and verify with ui_read or another
-small UI check when practical. Do NOT use screenshots or coordinates when UI Automation can
-represent the target. Use visual tools only as a fallback for pixels/canvas/spatial targets.
-Prefer one observe -> one action -> one verify cycle instead of guessing or repeating.
+You are an agent, not a command parser. Understand the user's intent from natural
+Indonesian or English, including follow-up references such as "itu", "yang tadi",
+"di sana", "ketik di search bar", "pilih yang kedua", and multi-step requests.
+Do not require exact command phrases and do not ask the user to name tools.
 
-Never claim success unless a tool result supports it. Never access passwords, tokens,
-cookies, private keys, or credential stores. Webcam use requires an explicit request.
+At the start of each agent request, the user message may include a screenshot of the
+current desktop. Treat it as live context: identify the active app/page, focused
+field, visible controls, and current task state. Use that visual context to choose
+and sequence tools. If an element is positional or repeated, use visual_click.
+If the user asks to type/search in a visible page field, use browser_search or click
+the field visually, type the requested text, and submit it. Do not type into an
+unverified field. After each meaningful UI action, inspect the screen again when
+needed to verify the next step. Continue the task until the user's requested outcome
+is achieved or a genuine blocker appears; do not stop after only the first tool call.
 
-High-impact actions require explicit approval: deleting/overwriting data, risky file
-moves/renames, terminal commands, software installation/removal, security changes,
-shutdown/restart, sending/publishing/purchasing, or consequential Delete/Reset/Format/
-Install/Uninstall controls. Do not bypass approval.
+You have broad control over the user's Windows desktop through the tools below.
+Decide yourself which tools and sequence are needed to complete the user's request.
+Actually perform the requested desktop work and verify the result when practical.
+Do not claim an action happened unless its tool result says it succeeded. Use only
+the exact tool names provided in the tool list.
 
-For normal requests, do not ask unnecessary questions. Execute first, then give a short
-confirmation. If a request is a knowledge question with no PC action, answer directly.
+You may open applications by name, open arbitrary URLs, open files and folders,
+inspect visible UI, click by text or coordinates, move and drag the mouse, scroll,
+type text, press keyboard shortcuts, read ordinary user files, create/edit/rename/
+move/delete files, and operate Microsoft Word deeply. You may chain many tool calls
+to complete a multi-step task.
+
+When the user asks to search using a search field inside the current webpage, use browser_search. Do not substitute the Google search_web tool, and do not use the browser address bar when a page search field is explicitly requested.
+
+When the user refers to a visual or positional target such as "the second video",
+"the third card", "the button on the top right", or "the play icon", use the
+visual_click tool so the current screen is analyzed before the click. Do not rely
+on ui_click for repeated visual items that do not have unique accessible text.
+
+WORD HAS DEEP CONTROL: When Microsoft Word is active and the user asks to write,
+format, edit, select, style, align, change font/size, insert tables, read the
+current document, or save the document, use the Word tools below instead of
+pretending that generic typing is enough. You may use Word's COM automation to
+operate the active document and its selection. Preserve the user's intended
+content.
+
+HIGH-IMPACT ACTIONS: JARVIS will ask the user for approval immediately before
+destructive, irreversible, externally consequential, security-sensitive, or
+potentially dangerous actions. This includes deleting or overwriting data,
+moving/renaming data when it could cause loss, typing commands into a terminal,
+installing/uninstalling software, changing security settings, shutting down or
+restarting Windows, publishing/sending/purchasing, or clicking controls clearly
+labeled Delete, Remove, Reset, Format, Shutdown, Restart, Send, Publish, Buy,
+Purchase, Install, Uninstall, or similar. Do not try to bypass this approval.
+Normal desktop actions such as opening apps, browsing, reading ordinary files,
+typing into documents, and clicking ordinary UI controls do not require approval.
+
+Never retrieve passwords, authentication tokens, private keys, browser cookies,
+or other credential stores. Do not use the webcam unless the user explicitly
+asks. Treat the user's request as authorization for ordinary desktop work, but
+not as permission to bypass the approval step for high-impact actions.
+
+Keep spoken answers concise. If the user asks a normal knowledge question,
+answer it directly without calling a PC tool.
 """
 
 APPS = {
@@ -157,11 +199,6 @@ TOOL_DECLARATIONS = [
     {"type":"function","function":{"name":"word_control","description":"Deeply control Microsoft Word through its active document. Use for Word-specific writing, formatting, editing, selection, alignment, styles, font size, tables, reading document text, and saving. Actions: new_document, write, format_selection, select_all, insert_table, replace_text, read_document, save, save_as.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["new_document","write","format_selection","select_all","insert_table","replace_text","read_document","save","save_as"]},"text":{"type":"string"},"replacement":{"type":"string"},"font_size":{"type":"number"},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"underline":{"type":"boolean"},"alignment":{"type":"string","enum":["left","center","right","justify"]},"style":{"type":"string"},"rows":{"type":"integer"},"columns":{"type":"integer"},"path":{"type":"string"}},"required":["action"]}}},
 
     {"type":"function","function":{"name":"ui_click","description":"Click a visible Windows UI element by its displayed title/text. Use this for buttons, tabs, menus, dialogs, and controls such as Word's Blank document.","parameters":{"type":"object","properties":{"text":{"type":"string"},"window_title":{"type":"string"}},"required":["text"]}}},
-    {"type":"function","function":{"name":"ui_tree","description":"Inspect the current Windows UI as a compact numbered accessibility tree. Use this FIRST for ordinary desktop interaction instead of screenshots or coordinates.","parameters":{"type":"object","properties":{"title":{"type":"string"},"process":{"type":"string"},"max_elements":{"type":"integer"},"max_depth":{"type":"integer"}}}}},
-    {"type":"function","function":{"name":"ui_find_text","description":"Find visible Windows UI controls by their displayed text and return compact numbered refs. Use before ui_act when the target ref is unknown.","parameters":{"type":"object","properties":{"text":{"type":"string"},"title":{"type":"string"},"process":{"type":"string"}},"required":["text"]}}},
-    {"type":"function","function":{"name":"ui_focused","description":"Read the currently focused Windows UI element.","parameters":{"type":"object","properties":{}}}},
-    {"type":"function","function":{"name":"ui_read","description":"Read visible non-sensitive text and values from the current Windows UI. Prefer this over screenshots when the text is exposed through accessibility.","parameters":{"type":"object","properties":{"title":{"type":"string"},"process":{"type":"string"},"max_chars":{"type":"integer"}}}}},
-    {"type":"function","function":{"name":"ui_act","description":"Perform a semantic Windows UI action using a ref or visible element name. Actions: click, set_value, focus, toggle, select, expand, collapse, scroll_into_view. Prefer this over coordinate clicks. Verify important actions from the returned result.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["click","set_value","focus","toggle","select","expand","collapse","scroll_into_view"]},"ref":{"type":"string"},"name":{"type":"string"},"value":{"type":"string"},"title":{"type":"string"},"process":{"type":"string"}},"required":["action"]}}},
     {"type":"function","function":{"name":"ui_inspect","description":"Inspect visible non-sensitive Windows UI controls so JARVIS can understand what is currently on screen before clicking. Do not use it to retrieve passwords or sensitive fields.","parameters":{"type":"object","properties":{"window_title":{"type":"string"}}}}},
 
     {"type":"function","function":{"name":"visual_click","description":"Use the vision model to locate a requested visible UI target on the current Windows screen and click it. This supports spatial requests such as click the second video, click the top-right button, click the third card, or click the play icon. The target must be visible on the current screen.","parameters":{"type":"object","properties":{"target":{"type":"string"},"button":{"type":"string","enum":["left","right","middle"]}},"required":["target"]}}},
@@ -260,8 +297,7 @@ def search_web(query: str) -> str:
     try:
         url = "https://www.google.com/search?q=" + quote_plus(query)
         opened = webbrowser.open(url, new=2)
-        return f"Successfully searched Google for {query}." if opened else "The browser refused to open the search."
-    except OSError as exc:
+        return f"Successfully searched Google for {query}." if opened else "The browser refused to open the search."    except OSError as exc:
         return f"Gagal melakukan pencarian: {exc}"
 
 
@@ -497,7 +533,9 @@ def hotkey(keys: str) -> str:
 
 
 def _foreground_process_name() -> str:
-    if os.name != "nt":        return ""    import ctypes
+    if os.name != "nt":
+        return ""
+    import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
     hwnd = user32.GetForegroundWindow()
@@ -558,8 +596,7 @@ def word_control(
                 inserted.Font.Italic = -1 if italic else 0
             if underline is not None:
                 inserted.Font.Underline = 1 if underline else 0
-            if font_size is not None:
-                inserted.Font.Size = float(font_size)
+            if font_size is not None:                inserted.Font.Size = float(font_size)
             if style:
                 try:
                     inserted.Style = style
@@ -642,6 +679,7 @@ def type_text(text: str) -> str:
         return "The text is empty."
     try:
         pyperclip.copy(text)
+        time.sleep(0.1)
         pyautogui.hotkey("ctrl", "v")
         return "The text was typed into the active window successfully."
     except Exception as exc:
@@ -857,8 +895,7 @@ def _vision_answer(client: Any, image_bytes: bytes, question: str, source: str) 
                 {"type":"text","text":f"JARVIS is viewing a {source}. Answer in concise Indonesian. Describe only what is visibly supported by the image. User asks: {question}"},
                 {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{encoded}"}}
             ]
-        }],
-        temperature=0.2,
+        }],        temperature=0.2,
         max_completion_tokens=700,
     )
     return (response.choices[0].message.content or "").strip()
@@ -949,16 +986,6 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
             int(arguments.get("columns", 0) or 0),
             str(arguments.get("path", "")),
         )
-    if name == "ui_tree":
-        return ui_tree(str(arguments.get("title", "")), str(arguments.get("process", "")), int(arguments.get("max_elements", 100) or 100), int(arguments.get("max_depth", 8) or 8))
-    if name == "ui_find_text":
-        return ui_find_text(str(arguments["text"]), str(arguments.get("title", "")), str(arguments.get("process", "")))
-    if name == "ui_focused":
-        return ui_focused()
-    if name == "ui_read":
-        return ui_read(str(arguments.get("title", "")), str(arguments.get("process", "")), int(arguments.get("max_chars", 12000) or 12000))
-    if name == "ui_act":
-        return ui_act(str(arguments.get("action", "")), str(arguments.get("ref", "")), str(arguments.get("name", "")), str(arguments.get("value", "")), str(arguments.get("title", "")), str(arguments.get("process", "")))
     if name == "ui_click":
         return ui_click(str(arguments["text"]), str(arguments.get("window_title","")))
     if name == "ui_inspect":
@@ -995,8 +1022,10 @@ def run_tool(name: str, arguments: dict[str, Any], client: Any | None = None) ->
             int(arguments["start_y"]),
             int(arguments["end_x"]),
             int(arguments["end_y"]),
-            float(arguments.get("duration", 0.5)),        )
-    if name == "pc_status":        return pc_status()
+            float(arguments.get("duration", 0.5)),
+        )
+    if name == "pc_status":
+        return pc_status()
     if name == "close_active_window":
         return close_active_window()
     if name == "close_app":
@@ -1165,8 +1194,7 @@ def _perform_confirmed_launch_application(name: str) -> str:
     try:
         pyautogui.hotkey("win", "s")
         time.sleep(0.4)
-        pyperclip.copy(str(name))
-        pyautogui.hotkey("ctrl", "v")
+        pyperclip.copy(str(name))        pyautogui.hotkey("ctrl", "v")
         time.sleep(0.4)
         pyautogui.press("enter")
         return f"Requested Windows Search to open {name}."
@@ -1284,102 +1312,66 @@ def _light_generate_and_type(client: Any, user_text: str) -> str:
     return result
 
 
-AGENT_HISTORY: list[dict[str, str]] = []
+def ask_agent(client: Any, user_text: str) -> str:
+    # Keep simple writing requests on a lightweight path. This avoids sending a
+    # screenshot and the full desktop tool catalog when all JARVIS needs to do is
+    # generate text and type it into Notepad.
+    if _is_light_write_request(user_text):
+        return _light_generate_and_type(client, user_text)
 
-
-def _remember_agent_event(role: str, content: str) -> None:
-    """Keep a tiny rolling memory so follow-up commands can refer to recent actions."""
-    text = str(content or "").strip()
-    if not text:
-        return
-    AGENT_HISTORY.append({"role": role, "content": text[:1200]})
-    del AGENT_HISTORY[:-8]
-
-
-def _select_agent_tools(user_text: str) -> list[dict]:
-    """Send only relevant tools to the small local model to keep prompts fast."""
-    text = " ".join(user_text.lower().split())
-    names = {
-        "desktop": {
-            "open_app", "type_text", "launch_application", "open_url",
-            "click_at", "double_click_at", "move_mouse", "drag_mouse",
-            "hotkey", "ui_tree", "ui_find_text", "ui_focused", "ui_read", "ui_act", "ui_click", "ui_inspect", "scroll_mouse", "wait_seconds",
-            "press_key", "close_active_window", "close_app", "stop_jarvis",
-        },
-        "visual": {"see_screen", "visual_click"},
-        "browser": {"browser_search", "search_web", "open_site"},
-        "files": {
-            "open_path", "list_directory", "read_file", "write_file",
-            "create_folder", "rename_path", "move_path", "delete_path",
-        },
-        "word": {"word_control"},
-    }
-    selected = set(names["desktop"])
-
+    # Screenshots are expensive on a small local model, so capture one only when
+    # the request actually depends on visual desktop context.
+    normalized_request = " ".join(user_text.lower().strip().split())
     visual_hints = (
-        "screen", "layar", "lihat", "baca layar", "yang kedua", "yang ketiga",
-        "yang pertama", "tombol", "button", "video", "card", "ikon", "icon",
-        "sebelah", "atas kanan", "bawah kiri", "di kiri", "di kanan",
+        "lihat", "baca layar", "lihat layar", "cek layar", "di layar",
+        "yang kedua", "yang ketiga", "yang pertama", "tombol", "button",
+        "video", "card", "ikon", "icon", "di sebelah", "atas kanan",
+        "bawah kiri", "on screen", "screen", "what is on",
     )
-    browser_hints = ("browser", "chrome", "youtube", "google", "web", "website", "search", "cari")
-    file_hints = ("file", "folder", "berkas", "dokumen", "download", "desktop", "documents")
-    word_hints = ("word", "microsoft word", "bold", "italic", "underline", "font", "paragraf", "tabel")
+    needs_screen = any(hint in normalized_request for hint in visual_hints)
 
-    if any(h in text for h in visual_hints):
-        selected |= names["visual"]
-    if any(h in text for h in browser_hints):
-        selected |= names["browser"]
-    if any(h in text for h in file_hints):
-        selected |= names["files"]
-    if any(h in text for h in word_hints):
-        selected |= names["word"]
+    user_content: Any = user_text
+    if needs_screen:
+        try:
+            shot = pyautogui.screenshot()
+            from io import BytesIO
+            buf = BytesIO()
+            shot.convert("RGB").save(buf, format="JPEG", quality=65)
+            encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+            user_content = [
+                {"type": "text", "text": (
+                    "Current desktop screenshot follows. Use it as context for the user's "
+                    "request. Do not describe the screenshot unless relevant. User request: "
+                    + user_text
+                )},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+            ]
+        except Exception as exc:
+            print(f"[SCREEN] Could not attach desktop context: {exc}")
 
-    return [
-        declaration for declaration in TOOL_DECLARATIONS
-        if declaration.get("function", {}).get("name") in selected
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
     ]
 
-
-def _ollama_native_agent_chat(messages: list[dict], tools: list[dict]) -> dict:
-    """Native Ollama agent request with tool calling, no OpenAI compatibility layer."""
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": messages,
-        "tools": tools,
-        "stream": False,
-        "think": False,
-        "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {
-            "num_ctx": OLLAMA_NUM_CTX,
-            "temperature": 0.2,
-            "num_predict": 220,
-        },
-    }
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib_request.Request(
-        f"{OLLAMA_NATIVE_BASE_URL}/api/chat",
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib_request.urlopen(req, timeout=OLLAMA_TIMEOUT_SECONDS) as response:
-        result = json.loads(response.read().decode("utf-8"))
-    return result.get("message", {}) or {}
-
-
-def ask_agent(client: Any, user_text: str) -> str:
-    global AGENT_HISTORY
-
+    # Safety/precision guard: if the user explicitly names an approved app
+    # together with "tutup", never let the LLM fall back to Alt+F4. Alt+F4 on
+    # the desktop can open Windows' Shut Down dialog, which is not wanted when
+    # closing a named application.
     normalized_request = " ".join(user_text.lower().strip().split())
-
-    # Named app closing is deterministic and safer than letting a small model
-    # choose Alt+F4, which can target the wrong window.
     close_words = ("tutup ", "tutupkan ", "close ")
     close_app_aliases = {
-        "kalkulator": "calculator", "calculator": "calculator",
-        "notepad": "notepad", "chrome": "chrome", "google chrome": "chrome",
-        "word": "word", "microsoft word": "word", "vscode": "vscode",
-        "vs code": "vscode", "explorer": "explorer", "task manager": "task manager",
+        "kalkulator": "calculator",
+        "calculator": "calculator",
+        "notepad": "notepad",
+        "chrome": "chrome",
+        "google chrome": "chrome",
+        "word": "word",
+        "microsoft word": "word",
+        "vscode": "vscode",
+        "vs code": "vscode",
+        "explorer": "explorer",
+        "task manager": "task manager",
     }
     for prefix in close_words:
         if normalized_request.startswith(prefix):
@@ -1390,122 +1382,62 @@ def ask_agent(client: Any, user_text: str) -> str:
             if target_app:
                 result = close_app(target_app)
                 print(f"[DIRECT] close_app({target_app}) -> {result}")
-                _remember_agent_event("assistant", result)
                 return result
 
-    _remember_agent_event("user", user_text)
-    tools = _select_agent_tools(user_text)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(AGENT_HISTORY[-6:])
+    for _ in range(6):
+        response = chat_create(client, 
+            model=MODEL,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+            temperature=0.4,
+        )
+        message = response.choices[0].message
 
-    # Keep the screenshot fallback, but only for requests that clearly need visual
-    # context. Native Ollama expects images as base64 in the user message.
-    needs_screen = any(hint in normalized_request for hint in (
-        "lihat", "baca layar", "di layar", "yang kedua", "yang ketiga",
-        "yang pertama", "video", "card", "ikon", "icon",
-        "di sebelah", "atas kanan", "bawah kiri", "on screen", "screen",
-        "what is on",
-    ))
+        if not message.tool_calls:
+            return (message.content or "").strip()
 
-    user_message = {"role": "user", "content": user_text}
-    if needs_screen:
-        try:
-            shot = pyautogui.screenshot()
-            from io import BytesIO
-            buf = BytesIO()
-            shot.convert("RGB").save(buf, format="JPEG", quality=55)
-            user_message["images"] = [base64.b64encode(buf.getvalue()).decode("ascii")]
-        except Exception as exc:
-            print(f"[SCREEN] Could not attach desktop context: {exc}")
-
-    messages.append(user_message)
-
-    for _ in range(5):
-        if LLM_PROVIDER == "ollama":
-            message = _ollama_native_agent_chat(messages, tools)
-        else:
-            response = chat_create(
-                client,
-                model=MODEL,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                temperature=0.3,
-            )
-            raw_message = response.choices[0].message
-            message = {
-                "role": "assistant",
-                "content": raw_message.content or "",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": (
-                                call.function.arguments
-                                if isinstance(call.function.arguments, dict)
-                                else json.loads(call.function.arguments or "{}")
-                            ),
-                        }
-                    }
-                    for call in (raw_message.tool_calls or [])
-                ],
-            }
-
-        tool_calls = message.get("tool_calls") or []
-        if not tool_calls:
-            reply = str(message.get("content", "") or "").strip()
-            if reply:
-                _remember_agent_event("assistant", reply)
-            else:
-                _remember_agent_event("assistant", "Task completed.")
-            return reply
-
-        # Preserve the exact assistant tool-call message for Ollama's next turn.
         messages.append(message)
 
-        for tool_call in tool_calls:
+        for tool_call in message.tool_calls:
             try:
-                function = tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
-                tool_name = str(function.get("name", "") or "")
-                raw_arguments = function.get("arguments", {}) or {}
-                arguments = (
-                    raw_arguments if isinstance(raw_arguments, dict)
-                    else json.loads(raw_arguments)
-                )
+                tool_name = tool_call.function.name
+                raw_arguments = tool_call.function.arguments or "{}"
+                arguments = raw_arguments if isinstance(raw_arguments, dict) else json.loads(raw_arguments)
 
                 if tool_name == "type_text" and _terminal_is_foreground():
                     approval = request_confirmation(
-                        "Type the requested text into the active terminal window. "
-                        "This may execute commands or alter system state."
+                        f"Type the requested text into the active terminal window. This may execute commands or alter system state."
                     )
-                    result = (
-                        run_tool(tool_name, arguments, client)
-                        if approval else "The user denied typing into the terminal."
-                    )
-                elif tool_name == "ui_click" and any(
-                    word in str(arguments.get("text", "")).lower()
-                    for word in RISKY_UI_WORDS
-                ):
+                    if not approval:
+                        result = "The user denied typing into the terminal."
+                    else:
+                        result = run_tool(tool_name, arguments, client)
+                elif tool_name == "ui_click" and any(word in str(arguments.get("text", "")).lower() for word in RISKY_UI_WORDS):
                     approval = request_confirmation(
                         f"Click the potentially consequential control '{arguments.get('text')}'."
                     )
-                    result = (
-                        run_tool(tool_name, arguments, client)
-                        if approval else "The user denied this consequential UI action."
-                    )
-                else:                    result = run_tool(tool_name, arguments, client)
+                    if not approval:
+                        result = "The user denied this consequential UI action."
+                    else:
+                        result = run_tool(tool_name, arguments, client)
+                else:
+                    result = run_tool(tool_name, arguments, client)
 
-                if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):                    description = result.split(":", 1)[1].strip()
+                if isinstance(result, str) and result.startswith("__RISKY_ACTION__:"):
+                    description = result.split(":", 1)[1].strip()
                     approval = request_confirmation(description)
                     if not approval:
                         result = "The user denied the high-impact action."
                     elif tool_name == "delete_path":
                         result = _perform_confirmed_delete(
-                            str(arguments["path"]), bool(arguments.get("recursive", False))
+                            str(arguments["path"]),
+                            bool(arguments.get("recursive", False)),
                         )
                     elif tool_name == "write_file":
                         result = _perform_confirmed_write(
-                            str(arguments["path"]), str(arguments["content"])
+                            str(arguments["path"]),
+                            str(arguments["content"]),
                         )
                     elif tool_name == "launch_application":
                         result = _perform_confirmed_launch_application(str(arguments["name"]))
@@ -1513,36 +1445,30 @@ def ask_agent(client: Any, user_text: str) -> str:
                         result = _perform_confirmed_hotkey(str(arguments["keys"]))
                     elif tool_name == "move_path":
                         result = _perform_confirmed_move(
-                            str(arguments["source"]), str(arguments["destination"])
+                            str(arguments["source"]),
+                            str(arguments["destination"]),
                         )
                     elif tool_name == "rename_path":
                         result = _perform_confirmed_rename(
-                            str(arguments["path"]), str(arguments["new_name"])
+                            str(arguments["path"]),
+                            str(arguments["new_name"]),
                         )
                     else:
                         result = f"Approved high-impact action, but no executor is registered for {tool_name}."
-
-                print(f"[TOOL] {tool_name} -> {result}")
-                if result == "__JARVIS_STOP__":
-                    return "__JARVIS_STOP__"
-
-                # Ollama requires the executed tool name on tool-result messages.
-                messages.append({
-                    "role": "tool",
-                    "tool_name": tool_name,
-                    "content": str(result),
-                })
             except Exception as exc:
                 result = f"Tool error: {exc}"
-                print(f"[TOOL] {tool_name} -> {result}")
-                messages.append({
-                    "role": "tool",
-                    "tool_name": tool_name,
-                    "content": result,
-                })
 
-    _remember_agent_event("assistant", "Task stopped after the safety step limit.")
-    return "I stopped after several steps to avoid an infinite loop."
+            print(f"[TOOL] {tool_call.function.name} -> {result}")
+            if result == "__JARVIS_STOP__":
+                return "__JARVIS_STOP__"
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result,
+            })
+
+    return "I stopped after several tool steps to avoid an infinite loop."
+
 
 def record_audio(path: Path) -> None:
     print("[MIC] Mendengarkan...")
@@ -1568,7 +1494,6 @@ def record_audio(path: Path) -> None:
             data, _ = stream.read(block_size)
             chunk = data.copy()
             energy = float(abs(chunk).mean())
-
             if energy >= ENERGY_THRESHOLD:
                 started = True
                 chunks.append(chunk)
@@ -1617,7 +1542,7 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
             normalized = normalized[len(prefix):].strip()
             break
 
-    app_aliases = {
+    # Fast text input: simple "ketik ..." commands bypass the LLM.\n    # Multi-step/contextual requests still go to the Computer Use agent.\n    for prefix in ("ketik ", "ketikkan ", "type "):\n        if normalized.startswith(prefix):\n            value = normalized[len(prefix):].strip()\n            if value:\n                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:\n                    value = value[1:-1]\n                result = type_text(value)\n                print(f"[DIRECT] type_text -> {result}")\n                return result\n\n    # Formatting is deterministic when a rich-text editor is active.\n    format_all = {\n        "buat tulisan bold": ("ctrl+b",),\n        "buat tulisannya bold": ("ctrl+b",),\n        "jadikan tulisan bold": ("ctrl+b",),\n        "buat tulisan italic": ("ctrl+i",),\n        "buat tulisannya italic": ("ctrl+i",),\n        "jadikan tulisan italic": ("ctrl+i",),\n        "buat tulisan bold dan italic": ("ctrl+b", "ctrl+i"),\n        "buat tulisannya bold dan italic": ("ctrl+b", "ctrl+i"),\n        "jadikan tulisan bold dan italic": ("ctrl+b", "ctrl+i"),\n        "bold dan italic": ("ctrl+b", "ctrl+i"),\n    }\n    if normalized in format_all:\n        process = _foreground_process_name().lower()\n        if process not in {"winword.exe", "wordpad.exe"}:\n            result = "Aplikasi aktif tidak mendukung format bold/italic. Gunakan Word atau WordPad."\n            print(f"[DIRECT] formatting -> {result}")\n            return result\n        pyautogui.hotkey("ctrl", "a")\n        for combo in format_all[normalized]:\n            pyautogui.hotkey(*combo.split("+"))\n        result = "Format tulisan berhasil diubah."\n        print(f"[DIRECT] formatting -> {result}")\n        return result\n\n    app_aliases = {
         "chrome": "chrome", "google chrome": "chrome",
         "notepad": "notepad", "notepad app": "notepad",
         "note pad": "notepad", "not pad": "notepad",
@@ -1632,45 +1557,6 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
         "youtube": "youtube", "yt": "youtube", "google": "google",
         "github": "github", "chatgpt": "chatgpt",
     }
-
-    # Fast text input: simple "ketik ..." commands bypass the LLM.
-    # Multi-step/contextual requests still go to the Computer Use agent.
-    for prefix in ("ketik ", "ketikkan ", "type "):
-        if normalized.startswith(prefix):
-            value = normalized[len(prefix):].strip()
-            if value:
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-                    value = value[1:-1]
-                result = type_text(value)
-                print(f"[DIRECT] type_text -> {result}")
-                return result
-
-    # Formatting is deterministic when a rich-text editor is active.
-    # Notepad is plain text, so do not pretend Ctrl+B/Ctrl+I can format it.
-    format_all = {
-        "buat tulisan bold": ("ctrl+b",),
-        "buat tulisannya bold": ("ctrl+b",),
-        "jadikan tulisan bold": ("ctrl+b",),
-        "buat tulisan italic": ("ctrl+i",),
-        "buat tulisannya italic": ("ctrl+i",),
-        "jadikan tulisan italic": ("ctrl+i",),
-        "buat tulisan bold dan italic": ("ctrl+b", "ctrl+i"),
-        "buat tulisannya bold dan italic": ("ctrl+b", "ctrl+i"),
-        "jadikan tulisan bold dan italic": ("ctrl+b", "ctrl+i"),
-        "bold dan italic": ("ctrl+b", "ctrl+i"),
-    }
-    if normalized in format_all:
-        process = _foreground_process_name().lower()
-        if process not in {"winword.exe", "wordpad.exe"}:
-            result = "Aplikasi aktif tidak mendukung format bold/italic. Notepad adalah plain text."
-            print(f"[DIRECT] formatting -> {result}")
-            return result
-        pyautogui.hotkey("ctrl", "a")
-        for combo in format_all[normalized]:
-            pyautogui.hotkey(*combo.split("+"))
-        result = "Format tulisan berhasil diubah."
-        print(f"[DIRECT] formatting -> {result}")
-        return result
 
     # Only exact, single-purpose open commands are direct.
     # Anything like "open Notepad and write..." goes to the agent.
@@ -1906,10 +1792,7 @@ def main() -> None:
                 if direct_reply == "__JARVIS_STOP__":
                     print("[JARVIS] Text mode stopped.")
                     break
-                print(f"JARVIS: {direct_reply}")
-                _remember_agent_event("user", heard)
-                _remember_agent_event("assistant", direct_reply)
-                continue
+                print(f"JARVIS: {direct_reply}")                continue
 
             try:
                 reply = ask_agent(llm_client, heard)
@@ -1930,31 +1813,89 @@ def main() -> None:
         while True:
             try:
                 record_audio(audio_path)
-                text = transcribe(stt_client, audio_path)
-                if not text:
-                    continue
+                heard = transcribe(stt_client, audio_path)
+            except (OSError, sd.PortAudioError) as exc:
+                print(f"[MIC] {exc}")
+                speak("I cannot access the microphone. Please check your Windows audio device.")
+                time.sleep(2)
+                continue
+            except Exception as exc:
+                print(f"[STT] {exc}")
+                speak("Speech recognition failed. Please check the connection and GROQ API key.")
+                time.sleep(2)
+                continue
 
-                direct_reply = try_direct_command(text, llm_client)
-                if direct_reply is not None:
-                    if direct_reply == "__JARVIS_STOP__":
-                        speak("Understood, Sir. Shutting down the JARVIS system.")
-                        break
-                    speak(direct_reply)
-                    continue
+            if not heard:
+                continue
 
-                try:
-                    reply = ask_agent(llm_client, text)
-                    if reply == "__JARVIS_STOP__":
-                        speak("Understood, Sir. Shutting down the JARVIS system.")
-                        break
-                    if reply:
-                        speak(reply)
-                except KeyboardInterrupt:
-                    print("\n[JARVIS] Dihentikan dari keyboard.")
+            print(f"Sir: {heard}")
+            normalized = " ".join(heard.lower().strip().split())
+            normalized = normalized.strip(".,!?;:")
+
+            shutdown_phrases = {
+                "shutdown jarvis",
+                "matikan jarvis",
+                "matikan diri",
+                "matikan diri sendiri",
+                "matikan dirimu",
+                "matikan diri lu",
+                "matikan diri lo",
+                "berhenti mendengarkan",
+                "matikan mode suara",
+                "stop jarvis",
+                "stop jervis",
+                "stop yervis",
+                "stop diri sendiri",
+                "jervis matikan diri lo",
+                "yervis matikan diri lo",
+                "surface matikan diri lo",
+            }
+
+            shutdown_words = set(normalized.split())
+            has_app_target = bool(shutdown_words & {
+                "kalkulator", "calculator", "notepad", "chrome", "word",
+                "vscode", "explorer", "aplikasi", "jendela"
+            })
+            shutdown_intent = (
+                normalized in shutdown_phrases
+                or (
+                    not has_app_target
+                    and ("matikan" in shutdown_words)
+                    and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"})
+                )
+                or normalized.startswith("matikan diri")
+                or normalized.startswith("stop jarvis")
+                or normalized.startswith("stop jervis")
+                or normalized.startswith("stop yervis")
+            )
+
+            if shutdown_intent:
+                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
+                speak("Understood, Sir. Shutting down the JARVIS system.")
+                return
+
+            direct_reply = try_direct_command(heard, llm_client)
+            if direct_reply is not None:
+                if direct_reply == "__JARVIS_STOP__":
+                    print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
+                    speak("Understood, Sir. Shutting down the JARVIS system.")
+                    return
+                speak(direct_reply)
+                continue
+
+            try:
+                reply = ask_agent(llm_client, heard)
+                if reply == "__JARVIS_STOP__":
+                    speak("Understood, Sir. Shutting down the JARVIS system.")
                     break
-                except Exception as exc:
-                    print(f"[AGENT] {exc}")
-                    speak("I could not process that request, Sir. Please check the terminal log.")
+                if reply:
+                    speak(reply)
+            except KeyboardInterrupt:
+                print("\n[JARVIS] Dihentikan dari keyboard.")
+                break
+            except Exception as exc:
+                print(f"[AGENT] {exc}")
+                speak("I could not process that request, Sir. Please check the terminal log.")
 
     except KeyboardInterrupt:
         print("\n[JARVIS] Dihentikan dari keyboard.")
