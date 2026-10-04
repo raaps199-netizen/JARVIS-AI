@@ -1327,7 +1327,7 @@ def _execute_agent_tool(tool_name: str, arguments: dict[str, Any], client: Any) 
         return f"Tool error: {exc}"
 
 
-def _select_tools_for_query(query: str, top_n: int = 16) -> list[dict[str, Any]]:
+def _select_tools_for_query(query: str, top_n: int = 10) -> list[dict[str, Any]]:
     """Select a compact relevant tool set using the BM25-style idea from AnythingLLM."""
     if len(TOOL_DECLARATIONS) <= top_n:
         return _gemini_tool_declarations()
@@ -1350,10 +1350,11 @@ def _select_tools_for_query(query: str, top_n: int = 16) -> list[dict[str, Any]]
     for i, doc in enumerate(docs):
         scores.append((len(q & doc), i))
 
+    # Small semantic safety net. Scored tools fill the remaining slots.
+    # This keeps Gemini's function schema compact without phrase-specific rules.
     core = {
-        "open_app", "open_site", "open_url", "type_text", "press_key", "hotkey",
-        "ui_inspect", "ui_click", "visual_click", "see_screen", "word_control",
-        "close_app", "close_active_window", "stop_jarvis", "pc_status",
+        "open_app", "open_site", "open_url", "type_text", "press_key",
+        "close_app", "ui_map", "ui_act", "see_screen", "visual_click",
     }
     selected = {i for i, d in enumerate(declarations) if d.get("name") in core}
     for _score, i in sorted(scores, reverse=True):
