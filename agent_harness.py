@@ -644,7 +644,6 @@ def type_text(text: str) -> str:
         return "The text is empty."
     try:
         pyperclip.copy(text)
-        time.sleep(0.1)
         pyautogui.hotkey("ctrl", "v")
         return "The text was typed into the active window successfully."
     except Exception as exc:
@@ -1640,6 +1639,45 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
         "github": "github", "chatgpt": "chatgpt",
     }
 
+    # Fast text input: simple "ketik ..." commands bypass the LLM.
+    # Multi-step/contextual requests still go to the Computer Use agent.
+    for prefix in ("ketik ", "ketikkan ", "type "):
+        if normalized.startswith(prefix):
+            value = normalized[len(prefix):].strip()
+            if value:
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                    value = value[1:-1]
+                result = type_text(value)
+                print(f"[DIRECT] type_text -> {result}")
+                return result
+
+    # Formatting is deterministic when a rich-text editor is active.
+    # Notepad is plain text, so do not pretend Ctrl+B/Ctrl+I can format it.
+    format_all = {
+        "buat tulisan bold": ("ctrl+b",),
+        "buat tulisannya bold": ("ctrl+b",),
+        "jadikan tulisan bold": ("ctrl+b",),
+        "buat tulisan italic": ("ctrl+i",),
+        "buat tulisannya italic": ("ctrl+i",),
+        "jadikan tulisan italic": ("ctrl+i",),
+        "buat tulisan bold dan italic": ("ctrl+b", "ctrl+i"),
+        "buat tulisannya bold dan italic": ("ctrl+b", "ctrl+i"),
+        "jadikan tulisan bold dan italic": ("ctrl+b", "ctrl+i"),
+        "bold dan italic": ("ctrl+b", "ctrl+i"),
+    }
+    if normalized in format_all:
+        process = _foreground_process_name().lower()
+        if process not in {"winword.exe", "wordpad.exe"}:
+            result = "Aplikasi aktif tidak mendukung format bold/italic. Notepad adalah plain text."
+            print(f"[DIRECT] formatting -> {result}")
+            return result
+        pyautogui.hotkey("ctrl", "a")
+        for combo in format_all[normalized]:
+            pyautogui.hotkey(*combo.split("+"))
+        result = "Format tulisan berhasil diubah."
+        print(f"[DIRECT] formatting -> {result}")
+        return result
+
     # Only exact, single-purpose open commands are direct.
     # Anything like "open Notepad and write..." goes to the agent.
     for prefix in ("open ", "buka ", "launch "):
@@ -1898,100 +1936,3 @@ def main() -> None:
         while True:
             try:
                 record_audio(audio_path)
-                heard = transcribe(stt_client, audio_path)
-            except (OSError, sd.PortAudioError) as exc:
-                print(f"[MIC] {exc}")
-                speak("I cannot access the microphone. Please check your Windows audio device.")
-                time.sleep(2)
-                continue
-            except Exception as exc:
-                print(f"[STT] {exc}")
-                speak("Speech recognition failed. Please check the connection and GROQ API key.")
-                time.sleep(2)
-                continue
-
-            if not heard:
-                continue
-
-            print(f"Sir: {heard}")
-            normalized = " ".join(heard.lower().strip().split())
-            normalized = normalized.strip(".,!?;:")
-
-            shutdown_phrases = {
-                "shutdown jarvis",
-                "matikan jarvis",
-                "matikan diri",
-                "matikan diri sendiri",
-                "matikan dirimu",
-                "matikan diri lu",
-                "matikan diri lo",
-                "berhenti mendengarkan",
-                "matikan mode suara",
-                "stop jarvis",
-                "stop jervis",
-                "stop yervis",
-                "stop diri sendiri",
-                "jervis matikan diri lo",
-                "yervis matikan diri lo",
-                "surface matikan diri lo",
-            }
-
-            shutdown_words = set(normalized.split())
-            has_app_target = bool(shutdown_words & {
-                "kalkulator", "calculator", "notepad", "chrome", "word",
-                "vscode", "explorer", "aplikasi", "jendela"
-            })
-            shutdown_intent = (
-                normalized in shutdown_phrases
-                or (
-                    not has_app_target
-                    and ("matikan" in shutdown_words)
-                    and bool(shutdown_words & {"jarvis", "jervis", "yervis", "surface"})
-                )
-                or normalized.startswith("matikan diri")
-                or normalized.startswith("stop jarvis")
-                or normalized.startswith("stop jervis")
-                or normalized.startswith("stop yervis")
-            )
-
-            if shutdown_intent:
-                print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
-                speak("Understood, Sir. Shutting down the JARVIS system.")
-                return
-
-            direct_reply = try_direct_command(heard, llm_client)
-            if direct_reply is not None:
-                if direct_reply == "__JARVIS_STOP__":
-                    print("[JARVIS] Perintah shutdown diterima. Menghentikan proses agent...")
-                    speak("Understood, Sir. Shutting down the JARVIS system.")
-                    return
-                speak(direct_reply)
-                _remember_agent_event("user", heard)
-                _remember_agent_event("assistant", direct_reply)
-                continue
-
-            try:
-                reply = ask_agent(llm_client, heard)
-                if reply == "__JARVIS_STOP__":
-                    speak("Understood, Sir. Shutting down the JARVIS system.")
-                    break
-                if reply:
-                    speak(reply)
-            except KeyboardInterrupt:
-                print("\n[JARVIS] Dihentikan dari keyboard.")
-                break
-            except Exception as exc:
-                print(f"[AGENT] {exc}")
-                speak("I could not process that request, Sir. Please check the terminal log.")
-
-    except KeyboardInterrupt:
-        print("\n[JARVIS] Dihentikan dari keyboard.")
-    finally:
-        try:
-            audio_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
-if __name__ == "__main__":
-    main()
