@@ -1169,18 +1169,18 @@ def _windows_process_name_from_hwnd(hwnd: int) -> str:
 
 
 def close_app(name: str) -> str:
-    """Close one specific approved app without relying on the currently focused window."""
+    """Close every visible top-level window belonging to one approved app."""
     exe_map = {
-        "notepad": "notepad.exe",
-        "calculator": "calculatorapp.exe",
-        "chrome": "chrome.exe",
-        "vscode": "code.exe",
-        "word": "winword.exe",
-        "explorer": "explorer.exe",
-        "task manager": "taskmgr.exe",
+        "notepad": {"notepad.exe"},
+        "calculator": {"calculatorapp.exe", "applicationframehost.exe"},
+        "chrome": {"chrome.exe"},
+        "vscode": {"code.exe"},
+        "word": {"winword.exe"},
+        "explorer": {"explorer.exe"},
+        "task manager": {"taskmgr.exe"},
     }
-    target = exe_map.get(name)
-    if not target:
+    targets = exe_map.get(name)
+    if not targets:
         return f"Aplikasi {name} tidak bisa ditutup secara spesifik."
     if os.name != "nt":
         return "Closing a specific application is only supported on Windows."
@@ -1190,87 +1190,62 @@ def close_app(name: str) -> str:
 
     user32 = ctypes.windll.user32
     WM_CLOSE = 0x0010
-    WM_SYSCOMMAND = 0x0112
-    SC_CLOSE = 0xF060
     matches = []
 
     EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
-    @EnumWindowsProc
-    def enum_window(hwnd, _lparam):
-        if not user32.IsWindowVisible(hwnd):
-            return True
-
-        process_name = _windows_process_name_from_hwnd(hwnd)
-        title_buffer = ctypes.create_unicode_buffer(512)
-        user32.GetWindowTextW(hwnd, title_buffer, 512)
-        title = title_buffer.value.strip().lower()
-
-        matched = process_name == target
-        if name == "calculator" and process_name == "applicationframehost.exe":
-            matched = title in {"calculator", "kalkulator"} or "calculator" in title
-
-        if matched:
-            matches.append(hwnd)
-        return True
-
-    user32.EnumWindows(enum_window, 0)
-
-    # First request a normal window close.
-    for hwnd in matches:
-        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
-        user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
-
-    time.sleep(0.7)
-
-    def calculator_window_exists() -> bool:
+    def collect_windows():
         found = []
+
         @EnumWindowsProc
-        def check_window(hwnd, _lparam):
+        def enum_window(hwnd, _lparam):
             if not user32.IsWindowVisible(hwnd):
                 return True
+
             process_name = _windows_process_name_from_hwnd(hwnd)
             title_buffer = ctypes.create_unicode_buffer(512)
             user32.GetWindowTextW(hwnd, title_buffer, 512)
             title = title_buffer.value.strip().lower()
-            if process_name == "calculatorapp.exe":
-                found.append(hwnd)
-            elif (
+
+            matched = process_name in targets
+            if (
                 name == "calculator"
                 and process_name == "applicationframehost.exe"
-                and (title in {"calculator", "kalkulator"} or "calculator" in title)
             ):
+                matched = title in {"calculator", "kalkulator"} or "calculator" in title
+
+            if matched:
                 found.append(hwnd)
             return True
-        user32.EnumWindows(check_window, 0)
-        return bool(found)
 
-    if name == "calculator" and calculator_window_exists():
-        # Calculator may be hosted by ApplicationFrameHost and ignore WM_CLOSE.
-        # Use an exact Calculator window-title filter so we never close the
-        # currently focused unrelated application.
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/FI", "WINDOWTITLE eq Calculator"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except Exception as exc:
-            print(f"[CLOSE] Calculator fallback failed: {exc}")
+        user32.EnumWindows(enum_window, 0)
+        return found
 
-        time.sleep(0.8)
+    matches = collect_windows()
+    count = len(matches)
 
-    if name == "calculator" and calculator_window_exists():
-        return "I found Calculator, but Windows did not close its window."
-
-    if not matches and name != "calculator":
+    if not matches:
         return f"{name} tidak sedang terbuka."
 
-    return f"Berhasil menutup {name}."
+    # Ask every matching top-level window to close. This handles multiple
+    # independent Notepad instances instead of only the foreground window.
+    for hwnd in matches:
+        try:
+            user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+        except Exception:
+            pass
 
+    # Give Windows a moment to process normal WM_CLOSE messages, then verify.
+    time.sleep(0.5)
+    remaining = collect_windows()
 
+    if remaining:
+        return (
+            f"Berhasil meminta {count - len(remaining)} dari {count} "
+            f"jendela {name} untuk ditutup, tetapi {len(remaining)} masih terbuka."
+        )
+
+    return f"Berhasil menutup {count} jendela {name}."
 
 
 def close_active_window() -> str:
