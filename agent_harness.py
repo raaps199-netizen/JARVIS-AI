@@ -1647,6 +1647,23 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
     for prefix in typing_prefixes:
         if original_lower.startswith(prefix) and not any(term in original_lower for term in word_format_terms):
             typed = original_clean[len(prefix):].strip()
+
+            # Let the LLM handle requests where the user wants JARVIS to
+            # generate the content first, then type the generated result.
+            generate_markers = (
+                "apapun tentang",
+                "apa saja tentang",
+                "sesuatu tentang",
+                "ceritakan tentang",
+                "jelaskan tentang",
+                "buatkan tentang",
+                "tulis tentang",
+                "tuliskan tentang",
+                "jawaban tentang",
+            )
+            if any(marker in typed.lower() for marker in generate_markers):
+                return None
+
             if typed.startswith(","):
                 typed = typed[1:].strip()
             if typed:
