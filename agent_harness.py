@@ -67,7 +67,7 @@ def build_llm_client():
 
 
 def chat_create(client: Any, **kwargs):
-    """Call the active chat backend and disable Qwen thinking for fast commands."""
+    """Call the active chat backend with local Ollama optimizations."""
     if LLM_PROVIDER == "ollama":
         extra_body = dict(kwargs.pop("extra_body", {}) or {})
         extra_body["think"] = False
@@ -1237,87 +1237,6 @@ def request_confirmation(description: str) -> bool:
         return False
     return answer in {"y", "yes", "approve", "approved", "iya", "ya", "lanjut", "boleh"}
 
-
-
-def _is_light_write_request(user_text: str) -> bool:
-    """Recognize simple content-generation requests that only need generated text + typing."""
-    normalized = " ".join(user_text.lower().strip().split())
-    write_words = ("tulis ", "ketik ", "ketikkan ", "write ", "type ")
-    destination_words = ("di notepad", "ke notepad", "in notepad", "into notepad")
-    return normalized.startswith(write_words) and any(word in normalized for word in destination_words)
-
-
-def _extract_write_instruction(user_text: str) -> str:
-    normalized = " ".join(user_text.strip().split())
-    lowered = normalized.lower()
-    for prefix in ("tulis ", "ketik ", "ketikkan ", "write ", "type "):
-        if lowered.startswith(prefix):
-            instruction = normalized[len(prefix):].strip()
-            for suffix in (" di notepad", " ke notepad", " in notepad", " into notepad"):
-                if instruction.lower().endswith(suffix):
-                    instruction = instruction[:-len(suffix)].strip()
-                    break
-            return instruction
-    return normalized
-
-
-def _ollama_native_chat(messages: list[dict[str, str]], *, num_predict: int = 180, temperature: float = 0.4) -> str:
-    """Use Ollama's native API for small local generations.
-
-    Native /api/chat reliably supports think=false, keep_alive, and num_ctx without
-    routing the request through the OpenAI compatibility layer.
-    """
-    if LLM_PROVIDER != "ollama":
-        raise RuntimeError("Native Ollama chat is only available with the Ollama provider.")
-
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": messages,
-        "stream": False,
-        "think": False,
-        "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {
-            "num_ctx": OLLAMA_NUM_CTX,
-            "temperature": temperature,
-            "num_predict": num_predict,
-        },
-    }
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib_request.Request(
-        f"{OLLAMA_NATIVE_BASE_URL}/api/chat",
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib_request.urlopen(req, timeout=OLLAMA_TIMEOUT_SECONDS) as response:
-        result = json.loads(response.read().decode("utf-8"))
-
-    return str(result.get("message", {}).get("content", "") or "").strip()
-
-
-def _light_generate_and_type(client: Any, user_text: str) -> str:
-    """Generate short text without screenshots or the full desktop tool payload."""
-    instruction = _extract_write_instruction(user_text)
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are JARVIS's fast writing module. Generate only the text the user "
-                "asked to write. Do not explain your process. Do not use markdown unless "
-                "the user asks for it. Keep ordinary requests concise."
-            ),
-        },
-        {
-            "role": "user",
-            "content": instruction,
-        },
-    ]
-    generated = _ollama_native_chat(messages, num_predict=180, temperature=0.4)
-    if not generated:
-        return "I could not generate the requested text."
-    result = type_text(generated)
-    print(f"[LIGHT] generated text -> {result}")
-    return result
 
 
 def ask_agent(client: Any, user_text: str) -> str:
