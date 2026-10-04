@@ -114,7 +114,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 6
 MIN_RECORD_SECONDS = 0.35
-SILENCE_SECONDS = 0.55
+SILENCE_SECONDS = 0.35
 UI_DELAY_SECONDS = 0.8
 START_TIMEOUT_SECONDS = 0
 ENERGY_THRESHOLD = 120
@@ -304,7 +304,7 @@ def open_app(name: str) -> str:
             "settings": {"systemsettings.exe", "applicationframehost.exe"},
         }
         wanted = process_hints.get(name, set())
-        deadline = time.monotonic() + 2.0
+        deadline = time.monotonic() + 0.65
         focused = False
         while time.monotonic() < deadline:
             try:
@@ -335,7 +335,7 @@ def open_app(name: str) -> str:
                 pass
             if focused:
                 break
-            time.sleep(0.08)
+            time.sleep(0.03)
 
         LAST_OPENED_APP = name
         if focused:
@@ -1299,7 +1299,7 @@ def close_app(name: str) -> str:
             pass
 
     # Give Windows a moment to process normal WM_CLOSE messages, then verify.
-    time.sleep(0.5)
+    time.sleep(0.20)
     remaining = collect_windows()
 
     if remaining:
