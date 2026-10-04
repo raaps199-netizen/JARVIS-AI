@@ -1559,6 +1559,36 @@ def try_direct_command(text: str, client: Any | None = None) -> str | None:
                 print(f"[DIRECT] type_text -> {result}")
                 return result
 
+    # Fast formatting path: common voice phrases should not wake the LLM agent.
+    # In Word/WordPad, Ctrl+B/Ctrl+I are deterministic and near-instant.
+    format_shortcuts = {
+        "make it bold": ("ctrl", "b"),
+        "make this bold": ("ctrl", "b"),
+        "make the text bold": ("ctrl", "b"),
+        "bold it": ("ctrl", "b"),
+        "make it italic": ("ctrl", "i"),
+        "make this italic": ("ctrl", "i"),
+        "make the text italic": ("ctrl", "i"),
+        "italic it": ("ctrl", "i"),
+        "buat jadi bold": ("ctrl", "b"),
+        "buat jadi tebal": ("ctrl", "b"),
+        "jadikan bold": ("ctrl", "b"),
+        "jadikan tebal": ("ctrl", "b"),
+        "buat jadi italic": ("ctrl", "i"),
+        "buat jadi miring": ("ctrl", "i"),
+        "jadikan italic": ("ctrl", "i"),
+        "jadikan miring": ("ctrl", "i"),
+    }
+    shortcut = format_shortcuts.get(normalized)
+    if shortcut:
+        process = _foreground_process_name().lower()
+        if process in {"winword.exe", "wordpad.exe"}:
+            result = press_key("+".join(shortcut))
+            print(f"[DIRECT] formatting -> {result}")
+            return result
+        # Let the full Computer Use agent handle rich editors we don't identify
+        # locally. Plain-text apps such as Notepad cannot apply bold/italic.
+
     app_aliases = {
         "chrome": "chrome", "google chrome": "chrome",
         "notepad": "notepad", "notepad app": "notepad",
