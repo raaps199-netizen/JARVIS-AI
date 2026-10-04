@@ -3,3 +3,4 @@ openai
 python-dotenv
 pywinauto
 pywin32
+google-genai
