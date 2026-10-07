@@ -1,1 +1,0 @@
-Put your custom JARVIS action sound here as sounds/action.wav. WAV only. Restart JARVIS after changing the file. Optional: set JARVIS_ACTION_SOUND_FILE in .env to an absolute path to another WAV file.
