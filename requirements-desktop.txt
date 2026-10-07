@@ -1,8 +1,0 @@
-python-dotenv
-sounddevice
-SpeechRecognition
-pyttsx3
-PySide6
-pyautogui
-pyperclip
-groq
